@@ -1,0 +1,24 @@
+flowerbox 'peg metagrammar main: parse a grammar file and generate a gal parser from it';
+main [string Source_File, string Target_File]
+{
+    verbosity;
+    verbose 'peg metagrammar parser';
+    verbose 'input file: ' Source_File;
+    object C = (new Peg_Compiler);
+    C.File_Name = Source_File;
+    number Result = (C.Parse_Grammar);
+    if (Result > 0)
+    {
+        object Root (llast [C.Elements]);
+        object G (new Galgen);
+        Root.Gen_Grammar G;
+        write (G.Assemble) to Target_File;
+        say 'peg parse OK, generated parser written to ' Target_File;
+    }
+    else
+    {
+        write (C.Element_Report) to (Target_File s+ '.elems');
+        say 'peg parse FAILED';
+        say (C.Error_Report);
+    }
+}

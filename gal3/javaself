@@ -1,0 +1,217 @@
+#!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# javaself — emit the Java edition of the gal3 compilers from the _33
+# fixpoint artifacts, then verify the Java chain reproduces every pipeline
+# stage byte-identically (design: ../docs/java_selfhost_design.md).
+#
+# Precondition: a completed ./build && ./selfbuild && ./selfself (the _33
+# artifacts in $BUILD are ground truth), or ./galjavabuild for Java-only
+# edits.
+#
+# Usage: ./javaself [--keep-going] [artifact ...]
+#   default artifacts: gal fallback galpy galjava
+#   --keep-going: survey all failures instead of stopping at the first.
+# The .java compilers install to ~/.gal3 only when the full default set is
+# green — the install dir never holds an unverified Java compiler.
+#
+# Java notes: every artifact's public class is Compiler_Program (module
+# Compiler, renamed for the gal class of the same name), so each compiles
+# in its own work dir under $BUILD/javaself/. Compilation happens once in
+# phase A (javac is also the syntax/type gate); phase B runs the compiled
+# classes — the fallback fixpoint alone runs an artifact 4-6 times, and
+# the bigger rows take minutes per pass under the reflective runtime.
+
+source "$(dirname "$(readlink -f "$0")")/../galenv" || exit 1
+
+SRC="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+BUILD="${GAL_BUILD:-$GAL_HOME/gal3build}"
+BIN="$HOME/.gal3"
+W="$BUILD/javaself"
+mkdir -p "$W"
+
+# jdk pin: warn on major-version drift (recorded 2026-07-18: javac 21.0.10)
+GAL_JDK_PIN="21"
+if ! command -v javac >/dev/null 2>&1; then
+    echo "javaself: javac not found"; exit 1
+fi
+case "$(javac --version)" in
+    "javac $GAL_JDK_PIN."*) ;;
+    *) echo "javaself: warning: $(javac --version) is not pinned major $GAL_JDK_PIN.x" >&2 ;;
+esac
+
+KEEP=0
+ARTS=()
+for arg in "$@"; do
+    case "$arg" in
+        --keep-going) KEEP=1 ;;
+        *) ARTS+=("$arg") ;;
+    esac
+done
+# the four chain compilers come first: phase B runs them, so they are
+# always emitted and compiled; the remaining rows are verified as
+# compilation targets and java-fixpoint rows (their .java is emitted,
+# javac-gated, and rebuilt by the java chain). pygal is the long pole.
+CHAINSET="gal fallback galpy galjava"
+FULLSET="gal fallback galpy galjava pylex pyparse pygen galgo galjs galcpp galc pygal"
+[ ${#ARTS[@]} -eq 0 ] && ARTS=($FULLSET)
+
+STATUS=0
+CURRENT=""
+function fail
+{
+    echo "FAIL($CURRENT): $*"
+    STATUS=1
+    if [ $KEEP -eq 0 ]; then exit 1; fi
+    return 1
+}
+
+function stack
+{
+    # component list per artifact, after the shared zero prefix (must
+    # mirror the append lists in selfself exactly)
+    case "$1" in
+        gal)      echo "gal_base gal_main" ;;
+        fallback) echo "gal_base fallback_inference llm_inference fallback_main" ;;
+        galpy)    echo "gal_base fallback_inference python_inference llm_inference python_main" ;;
+        galjs)    echo "gal_base fallback_inference javascript_inference llm_inference javascript_main" ;;
+        galgo)    echo "gal_base fallback_inference go_inference llm_inference go_main" ;;
+        galjava)  echo "gal_base fallback_inference java_inference llm_inference java_main" ;;
+        galcpp)   echo "gal_base fallback_inference cpp_inference llm_inference cpp_main" ;;
+        galc)     echo "gal_base fallback_inference c_inference llm_inference c_main" ;;
+        galmumps) echo "gal_base fallback_inference mumps_inference llm_inference mumps_main" ;;
+        pylex)    echo "py_base py_main" ;;
+        pyparse)  echo "py_base pyparse_base python_parser pyparse_main" ;;
+        pygen)    echo "py_base pyparse_base python_parser pygen_base pygen_main" ;;
+        pygal)    echo "py_base pyparse_base python_parser pygal_base pygal_main" ;;
+        *)        echo "" ;;
+    esac
+}
+
+function run_java
+{
+    # run_java <artifact-runner> <in> <out>
+    rm -f "$3"
+    echo "        java $1 $2 '-->' $3"
+    java -cp "$W/$1" Compiler_Program "$2" "$3"
+    if [ ! -f "$3" ]; then
+        fail "java $1 did not create $3"
+        return 1
+    fi
+}
+
+function stage_diff
+{
+    # stage_diff <produced> <truth> <label>
+    if ! cmp -s "$1" "$2"; then
+        echo "    stage diff ($3): $1 vs $2"
+        diff "$1" "$2" | head -12
+        fail "stage diff at $3"
+        return 1
+    fi
+    echo "    $3 ok"
+}
+
+# ---- Phase A: emit the chain compilers (always — phase B runs them)
+# plus any requested non-chain rows; javac is both the gate and the
+# compile of the runnable classes.
+EMIT="$CHAINSET"
+for a in "${ARTS[@]}"; do
+    case " $CHAINSET " in
+        *" $a "*) ;;
+        *) EMIT="$EMIT $a" ;;
+    esac
+done
+echo "javaself phase A: emitting Java compilers from _33 atomics"
+for a in $EMIT; do
+    CURRENT="$a"
+    rm -f "$BUILD/$a.java"
+    python "$BIN/galjava_33.py" "$BUILD/${a}_33.atomic" "$BUILD/$a.java" < /dev/null
+    [ -f "$BUILD/$a.java" ] || { fail "galjava_33 did not create $a.java"; continue; }
+    rm -rf "$W/$a"
+    mkdir -p "$W/$a"
+    cp "$BUILD/$a.java" "$W/$a/Compiler_Program.java"
+    javac -d "$W/$a" "$W/$a/Compiler_Program.java" || { fail "javac rejected $a.java"; continue; }
+done
+
+# ---- Phase B: the Java chain rebuilds each artifact, diffing every stage
+for a in "${ARTS[@]}"; do
+    CURRENT="$a"
+    COMPONENTS="$(stack "$a")"
+    if [ -z "$COMPONENTS" ]; then fail "unknown artifact '$a'"; continue; fi
+    echo "javaself phase B: $a"
+
+    # staleness guard: re-concatenate the source stack from the working
+    # tree; it must match the .tx2 the _33 loop consumed.
+    J="$BUILD/${a}_jv"
+    {
+        echo "module Compiler {"
+        echo ""
+        echo ""
+        cat "$SRC/compiler_base.txt" "$SRC/compiler_dialect.txt" \
+            "$SRC/attributes_inference.txt" "$SRC/structure_inference.txt" \
+            "$SRC/data_type_inference.txt" "$SRC/inheritance_inference.txt" "$SRC/llm_inference.txt"
+        for c in $COMPONENTS; do cat "$SRC/$c.txt"; done
+        echo "}"
+    } > "$J.tx2"
+    if ! cmp -s "$J.tx2" "$BUILD/${a}_33.tx2"; then
+        fail "sources drifted since the last full loop (${a}_jv.tx2 != ${a}_33.tx2) — run ./build && ./selfbuild && ./selfself (or ./galjavabuild for Java-only edits) first"
+        continue
+    fi
+
+    # byte-hygiene guard: no carriage returns (Python text reads translate
+    # them, java does not), no non-BMP characters (Java strings are UTF-16
+    # like JS: code point vs UTF-16 unit offsets would diverge).
+    if ! python - "$J.tx2" <<'EOF'
+import sys
+data = open(sys.argv[1], encoding='utf-8').read()
+bad = []
+if '\r' in data: bad.append('carriage return')
+if any(ord(c) > 0xFFFF for c in data): bad.append('non-BMP character')
+if bad:
+    print('byte hygiene: ' + '; '.join(bad))
+    sys.exit(1)
+EOF
+    then fail "byte-hygiene guard tripped on $a"; continue; fi
+
+    run_java gal "$BUILD/${a}_33.tx2" "$J.gal" || continue
+    stage_diff "$J.gal" "$BUILD/${a}_33.gal" "gal stage" || continue
+
+    # fallback to fixpoint, same protocol as selfself's atomic(); keep
+    # ${a}_jv.fb0.. for divergence hunting against the Python chain's fbN
+    FALLBACK="$J.fallback"
+    cp "$J.gal" "$FALLBACK"
+    rm -f "$J".fb* &> /dev/null
+    FBFAIL=0
+    for (( COUNTER=0; COUNTER<5; COUNTER++)); do
+        TEMP="$J.fb$COUNTER"
+        run_java fallback "$FALLBACK" "$TEMP" || { FBFAIL=1; break; }
+        if cmp -s "$FALLBACK" "$TEMP"; then
+            echo "    files are equal!"
+            break
+        fi
+        FALLBACK="$TEMP"
+    done
+    [ $FBFAIL -eq 1 ] && continue
+    cp "$FALLBACK" "$J.atomic"
+    stage_diff "$J.atomic" "$BUILD/${a}_33.atomic" "atomic stage" || continue
+
+    run_java galpy "$J.atomic" "$J.py" || continue
+    stage_diff "$J.py" "$BUILD/${a}_33.py" "python stage" || continue
+
+    run_java galjava "$J.atomic" "$J.java" || continue
+    stage_diff "$J.java" "$BUILD/$a.java" "java fixpoint" || continue
+done
+
+if [ $STATUS -ne 0 ]; then
+    echo "javaself: FAILED (see stage diffs above)"
+    exit 1
+fi
+
+if [ "${ARTS[*]}" = "$FULLSET" ]; then
+    for a in $FULLSET; do
+        cp "$BUILD/$a.java" "$BIN"/
+    done
+    echo "javaself: GREEN — installed .java for all rows ($FULLSET) to $BIN"
+else
+    echo "javaself: green for subset (${ARTS[*]}) — not installing; run the full set to install"
+fi

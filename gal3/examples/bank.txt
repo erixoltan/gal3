@@ -1,0 +1,47 @@
+flowerbox 'bank: an account class with a real overdraft check, program 3 of the five-languages series';
+
+class Base;
+
+class Account
+{
+    property string Owner '';
+    property integer Balance 0;
+    constructor [string Owner]
+    {
+        my Owner = Owner;
+    }
+    method void Deposit [integer Amount]
+    {
+        my Balance = ([my Balance] + Amount);
+        say "deposited " Amount;
+    }
+    method void Withdraw [integer Amount]
+    {
+        if (Amount > [my Balance])
+        {
+            say "declined: " Amount " exceeds balance";
+        }
+        else
+        {
+            my Balance = ([my Balance] - Amount);
+            say "withdrew " Amount;
+        }
+    }
+    method void Statement
+    {
+        say "account: " [my Owner];
+        say "balance: " [my Balance];
+    }
+}
+
+module Bank
+{
+    main
+    {
+        object Acct = (new Account 'Ada Lovelace');
+        Acct.Deposit 2500;
+        Acct.Withdraw 1200;
+        Acct.Withdraw 5000;
+        Acct.Statement;
+    }
+}

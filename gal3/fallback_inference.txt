@@ -1,0 +1,1629 @@
+flowerbox "fallback inference, generates simpler gal code, allowing highly abstract language elements to be implemented in concrete programming languages.";
+
+class set Spell
+{
+    method string Fallback_Arguments
+    {
+        string Code '';
+        object Arg;
+        for each Arg in [my Arguments]
+        {
+            append Code ' ' [Arg.Fallback];
+        }
+        return Code;
+    }
+    method string Fallback_Args
+    {
+        string Code '';
+        object Arg;
+        for each Arg in [my Listargs]
+        {
+            append Code ' ' [Arg.Fallback];
+        }
+        return Code;
+    }
+
+    method string Append_Fallback_Args
+    {
+        if ((llength [my Listargs]) > 1)
+        {
+            return '';
+        }
+        string Code '';
+        object Arg;
+        for each Arg in [my Listargs]
+        {
+            append Code ' ' [Arg.Fallback];
+        }
+        if ((llength [my Listargs]) > 1)
+        {
+            return (append ' (append ' Code ')');
+        }
+        return Code;
+    }
+
+    method string Fallback_Memo_Wrapper [string Rule_Name]
+    {
+        comment `body of the packrat wrapper emitted around every generated
+        parse rule. it consults the memo table keyed by token position and
+        rule name, replays a cached outcome, or plants an in-progress seed and
+        runs the real rule body (renamed with the _Rule suffix) against a
+        fresh list. if the body reached its own seed, the rule is left
+        recursive: re-run it while the match keeps growing, replaying the
+        previous iteration at the recursion point and invalidating dependent
+        memo entries each round. replayed elements are the same objects, so
+        the element tree is identical to a fresh parse.`;
+        string W
+            'string Memo_Key (append (string [my Token_Pos]) ":' Rule_Name '");' [line]
+            'object Memo_Hit (i Memo_Get Memo_Key);' [line]
+            'if (not (Memo_Hit is null))' [line]
+            '{' [line]
+            [indent] 'return (i Memo_Replay Memo_Hit Parent_Elements);' [line]
+            '}' [line]
+            'integer Memo_Start_Token [my Token_Pos];' [line]
+            'integer Memo_Start_Char [my Char_Pos];' [line]
+            'object Memo_Seed (i Memo_Plant Memo_Key);' [line]
+            'list Memo_Produced;' [line]
+            'flag Memo_Result (i Parse_' Rule_Name '_Rule Memo_Produced);' [line]
+            'i Memo_Settle Memo_Seed Memo_Result Memo_Produced;' [line]
+            'if ([Memo_Seed.Detected] and Memo_Result)' [line]
+            '{' [line]
+            [indent] 'forever' [line]
+            [indent] '{' [line]
+            [indent] [indent] 'i Memo_Regrow_Begin Memo_Seed;' [line]
+            [indent] [indent] 'my Token_Pos = Memo_Start_Token;' [line]
+            [indent] [indent] 'my Char_Pos = Memo_Start_Char;' [line]
+            [indent] [indent] 'list Memo_Grow;' [line]
+            [indent] [indent] 'flag Memo_Grow_Result (i Parse_' Rule_Name '_Rule Memo_Grow);' [line]
+            [indent] [indent] 'break if (not (i Memo_Grew Memo_Seed Memo_Grow_Result Memo_Grow));' [line]
+            [indent] '}' [line]
+            '}' [line]
+            'i Memo_Finish Memo_Seed;' [line]
+            'return (i Memo_Replay Memo_Seed Parent_Elements);' [line];
+        return W;
+    }
+}
+
+class set Spell
+{
+    method string Fallback_Arg_Data_Type [object Arg]
+    {
+        comment `an argument's inferred definitional type, read through
+        its classification; empty when unknown`;
+        forgive
+        {
+            object AC [Arg.Classification];
+            string T [AC.Data_Type];
+            return '' if (T is an Element);
+            return T;
+        }
+        return '';
+    }
+}
+
+class set Statement
+{
+    property string Fallback_Declaration '';
+    method string Fallback_Block
+    {
+        defined [my Block Fallback]
+        {
+            return [my Block Fallback];
+        }
+        return ';';
+    }
+    method string Fallback_Statements
+    {
+        defined [my Block Fallback_Statements]
+        {
+            return [my Block Fallback_Statements];
+        }
+        return '';
+    }
+}
+
+class set Block
+{
+    property string Fallback_Statements '';
+}
+
+generator Fallback Gal
+{
+    english 'generate the optimal fallback code for each language element in the compiler dialect.';
+
+    generate Element
+        [my Gal];
+
+    generate Token_Quote
+    {
+        string Code (i Enquote [my Unquoted]);
+        i = Code;
+    }
+
+    generate Statement
+    {
+        string Code
+            [my Verb]
+            (i Fallback_Arguments)
+            (i Fallback_Block);
+        i = Code;
+    }
+    generate Operation
+    {        string Code
+            '(' [my Verb] (i Fallback_Arguments) ')';
+        i = Code;
+    }
+    generate Syntax
+    {
+        string Code [my Verb];
+        flag First [true];
+        object Arg;
+        for each Arg in [my Arguments]
+        {
+            if (First and (Arg is a Syntax_Tail))
+            {
+                Code = (i Syntax_Gal Code);
+                First = [false];
+            }
+            append Code ' ' [Arg.Fallback];
+        }
+        if First
+        {
+            Code = (i Syntax_Gal Code);
+        }
+        i = Code;
+    }
+    generate Syntax_Tail
+    {
+        join Keys [my Key_Words] ' ';
+        string Code Keys (i Fallback_Arguments);
+        Code = (i Syntax_Gal Code);
+        i = Code;
+    }
+    generate Block
+    {
+        string Statements '';
+        object Line;
+        for each Line in [my Statements]
+        {
+            append Statements [Line.Fallback] [line];
+        }
+        string Code;
+        if (Statements s= '')
+        {
+            Code = ';';
+        }
+        else
+        {
+            Statements = (i Indent Statements);
+            Code = (append [line] '{' [line] Statements '}');
+        }
+        my Fallback_Statements = Statements;
+        i = Code;
+    }
+
+    generate Program
+    {
+        string Code '';
+        object Stmt;
+        for each Stmt in [my Statements]
+        {
+            undefined [Stmt.Fallback]
+            {
+                Stmt.Infer_Fallback;
+            }
+            Code s+ [Stmt.Fallback] [line];
+        }
+        i = Code;
+    }
+
+
+    generate Statement_Argument
+    {
+        string Argument_Name [my Argument_Name Fallback];
+        string Code 'property object ' Argument_Name ';';
+        string Declaration
+            "if ((llength [my Listargs]) = 0)" [line]
+            "{" [line] [indent]
+                "error 'missing required argument " Argument_Name "';" [line]
+            "}" [line]
+            'my ' Argument_Name ' = (shift [my Listargs]);' [line];
+        append Declaration '[my ' Argument_Name ' Value] = ' [my Data_Type Fallback] ';' [line];
+        append Declaration '[my ' Argument_Name ' Usage] = ' [my Usage Fallback] ';' [line];
+        my Fallback_Declaration = Declaration;
+        i = Code;
+    }
+
+    generate Statement_Optional
+    {
+        string Argument_Name [my Argument_Name Fallback];
+        string Code 'property object ' Argument_Name ';';
+        string Declaration
+            "if ((llength [my Listargs]) > 0)" [line]
+            "{" [line] [indent]
+                'my ' Argument_Name ' = (shift [my Listargs]);' [line] [indent]
+                '[my ' Argument_Name ' Value] = ' [my Data_Type Fallback] ';' [line] [indent]
+                '[my ' Argument_Name ' Usage] = ' [my Usage Fallback] ';' [line]
+            "}" [line];
+        my Fallback_Declaration = Declaration;
+        i = Code;
+    }
+
+    generate Statement_Flowerbox
+    {
+        string Comment_Text '';
+        object Argument;
+        for each Argument in [my Arguments]
+        {
+            string Arg_Text [Argument.Fallback];
+            if (Argument is a Token_Quote)
+            {
+                Arg_Text = [Argument.Unquoted];
+            }
+            append Comment_Text Arg_Text;
+        }
+        list Lines split Comment_Text [line];
+        Comment_Text = '';
+        strings Line Full;
+        integer Width = 0;
+        for each Line in Lines
+        {
+            if ((length Line) > Width)
+            {
+                Width = (length Line);
+            }
+        }
+        for each Line in Lines
+        {
+            Full = (append Line '                                                                                                          ');
+            Full = (substring Full 0 Width);
+            Full = (append '* ' Full ' *');
+            append Comment_Text ' ' (i Enquote Full) ' [line]';
+        }
+        Width += 4;
+        string Stars '"' (substring "****************************************************************************************************************" 0 Width) '"';
+        Comment_Text = (append Stars ' [line] ' Comment_Text ' ' Stars);
+        string Code 'comment ' Comment_Text ';';
+        i = Code;
+    }
+    generate Statement_Method
+        'method' (i Fallback_Arguments) (i Fallback_Block);
+    generate Statement_Dictionary_Assign
+        Dict ' ' Subscript ' d= ' Value ';';
+
+    generate Statement_Generator
+    {
+        string Language [my Language Fallback];
+        string Ancestor 'Generator';
+        defined [my Ancestor]
+        {
+            Ancestor = (append [my Ancestor Fallback] '_Generator');
+        }
+
+        string Fallback_Statements '';
+        string Fallback_Declaration '';
+        object Statement;
+        for each Statement in [my Block Statements]
+        {
+            string Statement_Fb [Statement.Fallback];
+            string Statement_Dec [Statement.Fallback_Declaration];
+            if (Statement_Dec sgt '')
+            {
+                append Fallback_Declaration Statement_Dec [line];
+            }
+            if (Statement_Fb sgt '')
+            {
+                append Fallback_Statements Statement_Fb [line];
+            }
+        }
+        string Class Language '_Generator';
+        string Class_Definition `class ` Class ` is ` Ancestor `
+{
+    property flag Verbosity [false];
+    property string Language_Name ` (i Enquote Language) `;
+    property string Property_Name ` (i Enquote Language) `;
+    constructor [object Owner [null]]
+    {
+        my Owner = Owner;
+    }
+    method flag Infer_` Language `
+    {
+        comment "this verbosity defined in gal3 fallback_inference.txt for Statement_Generator.";
+        verbosity [my Verbosity];
+        object Elem;
+        object I;
+        integer Number = -1;
+        variant Error;
+        my Status = [true];
+        for each Elem in [my Elements]
+        {
+            try
+            {
+                Number++;
+                if (defined [Elem.Classification])
+                {
+                    I = [Elem.Classification];
+                    I.Infer_` Language `;
+                    Elem.` Language ` = [I.` Language `];
+                }
+                else
+                {
+                    Elem.Infer_` Language `;
+                }
+            }
+            catch Error
+            {
+                my Status = [false];
+                Elem.Error = Error;
+                verbose '!error! ` Language ` element ' Number ': ' [class name I] ', <' Error '>';
+            }
+        }
+        return [false] if (not [my Status]);
+        object Top = (llast [my Elements]);
+        Top.Infer_` Language `;
+        string Code [Top.` Language `];
+        my ` Language ` = Code;
+        my Code = Code;
+        return [true];
+    }
+}
+`;
+        string Code
+            Fallback_Declaration
+            Class_Definition
+            Fallback_Statements;
+        i = Code;
+    }
+    generate Statement_Generate
+    {
+        string Language ([my Parent].Get_Language_Name);
+        string Class_Name [my Class_Name Fallback];
+        object Argument;
+        string Method_Prefix '';
+        string Method_Suffix '';
+        if ((llength [my Listargs]) > 0)
+        {
+            append Method_Prefix [indent] 'string Code';
+            for each Argument in [my Listargs]
+            {
+                if ([Argument.Classification] is a Token_Word)
+                {
+                    append Method_Prefix ' [my ' [Argument.Fallback] ' ' Language ']';
+                }
+                else
+                {
+                    append Method_Prefix ' ' [Argument.Fallback];
+                }
+            }
+            append Method_Prefix ';' [line];
+            append Method_Suffix [indent] 'my ' Language ' = Code;' [line];
+        }
+        string Method_Statements
+            Method_Prefix
+            (i Fallback_Statements)
+            Method_Suffix;
+        string Method_Code
+            'method flag Infer_' Language [line]
+            '{' [line]
+                Method_Statements
+            '}';
+        string Code
+            'class set ' Class_Name [line]
+            '{' [line]
+                (i Indent Method_Code)
+            [line] '}';
+        i = Code;
+    }
+    generate Statement_Handle
+    {
+        string Class_Name [my Name Fallback];
+        string Inference ([my Parent].Get_Language_Name);
+        string Method
+            'method flag Infer_' Inference
+            (i Fallback_Block);
+        string Code
+            'class set ' Class_Name [line]
+            '{' [line]
+                (i Indent Method)
+            [line] '}';
+        i= Code;
+    }
+
+    generate Statement_Parser
+    {
+        verbosity;
+        string Declarations '';
+        object Statement;
+        forgive
+        {
+            for each Statement in [my Block Statements]
+            {
+                defined [Statement.Fallback_Declaration]
+                {
+                    append Declarations [Statement.Fallback_Declaration];
+                }
+            }
+        }
+        string Args (i Fallback_Args);
+        string Block (i Fallback_Block);
+        string Code
+            'class ' [my Name Fallback] '_Parser is Parser'
+            Args
+            Block
+            Declarations;
+        my Fallback_Declaration = Declarations;
+        i = Code;
+    }
+
+    generate Statement_Sequence
+    {
+        verbosity;
+        string Rule_Name [my Rule_Name Fallback];
+        string Declarations '';
+        flag First [false];
+        string Block 'comment ' (i Enquote (i Get_Input)) ';' [line]
+            'integer Start_Char = [my Char_Pos];' [line]
+            'integer Start_Token = [my Token_Pos];' [line]
+            'global list My_Elements;' [line];
+        if Verbose
+        {
+            append Block 'verbosity [true];' [line];
+            append Block 'verbose "Parsing sequence ' Rule_Name '.";' [line];
+        }
+        object Argument;
+        flag Excludes [false];
+        for each Argument in [my Listargs]
+        {
+            defined [Argument.Fallback_Declaration]
+            {
+                append Declarations [Argument.Fallback_Declaration];
+            }
+            if (Argument is a Token_Quote Syntax_Line Syntax_Tab)
+            {
+                string Text [Argument.Fallback];
+                append Block
+                    'if (not (i Parse_Token My_Elements ' Text ')) { i Rollback Start_Char Start_Token (append "' [my Rule_Name Fallback] ' expected "' Text '"."); return [false]; }' [line];
+                if Verbose
+                {
+                    append Block 'verbose [indent] "Sequence ' Rule_Name ' parsed literal: ' Text '";' [line];
+                }
+            }
+            else if (Argument is a Token)
+            {
+                string Name [Argument.Fallback];
+                append Block
+                    'if (not (i Parse_' Name ' My_Elements)) { i Rollback Start_Char Start_Token "' [my Rule_Name Fallback] ' expected ' Name '."; return [false]; }' [line];
+                if Verbose
+                {
+                    append Block 'verbose [indent] "Sequence ' Rule_Name ' parsed token ' Name '";' [line];
+                }
+            }
+            else if (Argument is a Syntax_Exclude)
+            {
+                = Excludes [true];
+                append Block [Argument.Fallback] [line];
+                if Verbose
+                {
+                    append Block 'verbose [indent] "Sequence ' Rule_Name ' parsed exclude: ' [Argument.Rule_Name Input] '";' [line];
+                }
+            }
+            else
+            {
+                append Block [Argument.Fallback] [line];
+                if Verbose
+                {
+                    append Block 'verbose [indent] "Sequence ' Rule_Name ' parsed rule: ' [Argument.Rule_Name Fallback] '";' [line];
+                }
+            }
+        }
+        if Verbose
+        {
+            append Block 'verbose "Sequence ' Rule_Name ' success, start " Start_Char;' [line];
+        }
+        append Block
+            'integer End [my Char_Pos];' [line]
+            'object Element (new ' Rule_Name ');' [line]
+            'object First_Child (lget [my Tokens] Start_Token);' [line]
+            'Start_Char = [First_Child.Start_Position];' [line]
+            'Element.Start_Position = Start_Char;' [line]
+            'Element.End_Position = End;' [line]
+            'Element.Document = [self];' [line]
+            'copy [Element.Elements] = My_Elements;' [line]
+            'i Add_Element Element;' [line]
+            'push Parent_Elements Element;' [line]
+            'return [true];' [line];
+        if Excludes
+        {
+            Block = (append 'list Excluded;' [line] Block);
+        }
+
+        Block = (i Indent Block);
+        string Wrapper (i Indent (i Fallback_Memo_Wrapper Rule_Name));
+        string Code 'method flag Parse_' Rule_Name
+            ' [list Parent_Elements]' [line]
+            '{' [line]
+            Wrapper
+            '}' [line]
+            'method flag Parse_' Rule_Name '_Rule [list Parent_Elements]' [line]
+            '{' [line]
+            Block
+            '}';
+        my Fallback_Declarations = Declarations;
+        i = Code;
+    }
+
+    generate Syntax_Sequence
+    {
+        debug;
+        string Declarations '';
+        todo 'the fallback is a reference to the named rule created by this syntax.';
+        todo 'the fallback declaration is the sequence function generated by this code.';
+        string My_Source (i Get_Input);
+        string Rule_Name [my Rule_Name Fallback];
+        string Block 'comment ' (i Enquote (i Get_Input)) ';' [line]
+            'integer Start_Char [my Char_Pos];' [line]
+            'integer Start_Token [my Token_Pos];' [line]
+            'global list My_Elements;' [line];
+        object Argument;
+        flag Excludes [false];
+        for each Argument in [my Listargs]
+        {
+            defined [Argument.Fallback_Declaration]
+            {
+                append Declarations [Argument.Fallback_Declaration];
+            }
+            if (Argument is a Token_Quote Syntax_Line)
+            {
+                string Text [Argument.Fallback];
+                append Block
+                    'if (not (i Parse_Token My_Elements ' Text ')) { i Rollback Start_Char Start_Token (append "' [my Rule_Name Fallback] ' expected "' Text '"."); return [false]; }' [line];
+            }
+            else if (Argument is a Token)
+            {
+                string Name [Argument.Fallback];
+                append Block
+                    'if (not (i Parse_' Name ' My_Elements)) { i Rollback Start_Char Start_Token "' [my Rule_Name Fallback] ' expected ' Name '."; return [false]; }' [line];
+            }
+            else if (Argument is a Syntax_Exclude)
+            {
+                Excludes = [true];
+                append Block [Argument.Fallback] [line];
+            }
+            else
+            {
+                append Block [Argument.Fallback] [line];
+            }
+        }
+        append Block
+            'integer End [my Char_Pos];' [line]
+            'object Element = (new ' [my Rule_Name Fallback] ');' [line]
+            'object First_Child = (lget [my Tokens] Start_Token);' [line]
+            'Start_Char = [First_Child.Start_Position];' [line]
+            'Element.Start_Position = Start_Char;' [line]
+            'Element.End_Position = End;' [line]
+            'Element.Document = [self];' [line]
+            'copy [Element.Elements] = My_Elements;' [line]
+            'i Add_Element Element;' [line]
+            'push Parent_Elements Element;' [line]
+            'return [true];' [line];
+        if Excludes
+        {
+            Block = (append 'list Excluded;' [line] Block);
+        }
+
+        = Block (i Indent Block);
+        string Code
+            Declarations
+            'method flag Parse_' Rule_Name
+            ' [list Parent_Elements]' [line]
+            '{' [line]
+            Block
+            '}';
+        my Fallback_Declaration = Code;
+        i = Rule_Name;
+    }
+
+    generate Statement_Either
+    {
+        verbosity;
+        string Rule_Name [my Rule_Name Fallback];
+        string Declarations '';
+        string Quoted_Input (i Enquote (i Get_Input));
+        string Block 'comment ' Quoted_Input ';' [line];
+        if Verbose
+        {
+            append Block 'verbosity [true];' [line]
+                'verbose "Parse " ' Quoted_Input ';' [line];
+        }
+        object Argument;
+        for each Argument in [my Listargs]
+        {
+            if Verbose
+            {
+                append Block
+                    'verbose [indent] '
+                    (i Enquote (append
+                        'Either '
+                        Rule_Name
+                        ' trying '
+                        (Argument.Get_Input)))
+                    ';' [line];
+            }
+            defined [Argument.Fallback_Declaration]
+            {
+                append Declarations [Argument.Fallback_Declaration];
+            }
+            if (Argument is a Token_Quote Syntax_Line Syntax_Tab)
+            {
+                append Block 'return [true] if (i Parse_Token Parent_Elements ' [Argument.Fallback] ');' [line];
+            }
+            else if (isa Argument Token)
+            {
+                append Block 'return [true] if (i Parse_' [Argument.Fallback] ' Parent_Elements);' [line];
+            }
+            else
+            {
+                append Block [Argument.Fallback];
+            }
+        }
+        if Verbose
+        {
+            append Block
+                'verbose "FAILED " ' Quoted_Input ';' [line];
+        }
+        = Block (i Indent Block);
+        string Wrapper (i Indent (i Fallback_Memo_Wrapper Rule_Name));
+        string Code 'method flag Parse_' Rule_Name
+            ' [list Parent_Elements]' [line]
+            '{' [line]
+            Wrapper
+            '}' [line]
+            'method flag Parse_' Rule_Name '_Rule [list Parent_Elements]' [line]
+            '{' [line]
+            Block
+            [indent] 'return [false];' [line]
+            '}';
+        my Fallback_Declaration = Declarations;
+        i = Code;
+    }
+
+    generate Statement_Token
+    {
+        verbosity;
+        string Name [my Class_Name Fallback];
+        string Code
+            'method flag Parse_' Name ' [list Parent_Elements]' [line]
+            '{' [line]
+            [indent] 'object Top_Token (i Top_Token);' [line]
+            [indent] 'return [false] if (isnull Top_Token);' [line]
+            [indent] 'if (not (isa Top_Token ' Name ')) { '
+                'Top_Token.Error = "Expected ' Name '";' [line]
+                'return [false]; }' [line]
+            [indent] 'push Parent_Elements Top_Token;' [line]
+            [indent] 'Top_Token.Error = [null];' [line]
+            [indent] 'i Consume_Token;' [line]
+            [indent] 'return [true];' [line]
+            '}';
+        i= Code;
+        string Declaration
+            'class set ' Name ' { property flag Isa_' Name ' [true]; }' [line];
+        verbose 'token declaration: ' Declaration;
+        my Fallback_Declaration = Declaration;
+    }
+    generate Statement_Tokens
+    {
+        verbosity;
+        string Code '';
+        object Argument;
+        string Between '';
+        string Declaration '';
+        string D;
+        for each Argument in [my Arguments]
+        {
+            string Name [Argument.Fallback];
+            append Code Between
+                'method flag Parse_' Name ' [list Parent_Elements]' [line]
+                '{' [line]
+                [indent] 'object Top_Token (i Top_Token);' [line]
+                [indent] 'quit : (isnull Top_Token) [false];' [line]
+                [indent] 'if (not (isa Top_Token ' Name ')) { '
+                'Top_Token.Error = "Expected ' Name '";' [line]
+                'return [false]; }' [line]
+                [indent] 'push Parent_Elements Top_Token;' [line]
+                [indent] 'Top_Token.Error = [null];' [line]
+                [indent] 'i Consume_Token;' [line]
+                [indent] 'return [true];' [line]
+                '}';
+                Between = [line];
+        }
+        i = Code;
+    }
+
+    generate Syntax_Repeating
+    {
+        string Declarations '';
+        string Rule [my Rule_Name Fallback];
+        string Self_Call '(i Parse_' Rule ' My_Elements)';
+        if (isa [my Rule_Name] Token_Quote Syntax_Line)
+        {
+            Self_Call = (append '(i Parse_Token My_Elements ' Rule ')');
+        }
+        defined [my Rule_Name Fallback_Declaration]
+        {
+            append Declarations [my Rule_Name Fallback_Declaration];
+        }
+        string Code
+            'comment `repeating ' Rule '`;' [line]
+            'if (not ' Self_Call ')' [line]
+            '{' [line] [indent]
+                'i Rollback Start_Char Start_Token `[repeating ' Rule '] expected at least one ' Rule '.`;' [line] [indent]
+                'return [false];' [line]
+            '}' [line]
+            'forever' [line]
+            '{' [line,
+            indent] 'break if (not ' Self_Call ');' [line]
+            '}';
+        my Fallback_Declaration = Declarations;
+        i = Code;
+    }
+
+    generate Syntax_Optional
+    {
+        string Declarations '';
+        string Rule [my Rule_Name Fallback];
+        string Self_Call 'i Parse_' Rule ' My_Elements;';
+        if (isa [my Rule_Name] Token_Quote Syntax_Line)
+        {
+            Self_Call = (append 'i Parse_Token My_Elements ' Rule ';');
+            defined [my Rule_Name Fallback_Declaration]
+            {
+                append Declarations [my Rule_Name Fallback_Declaration];
+            }
+        }
+        string Code
+            'comment `optional ' Rule '`;' [line]
+            Self_Call;
+        my Fallback_Declaration = Declarations;
+        i = Code;
+    }
+
+    generate Syntax_Optrep
+    {
+        string Declarations '';
+        string Rule [my Rule_Name Fallback];
+        string Defines '';
+        string Self_Call '(i Parse_' Rule ' My_Elements)';
+        if (isa [my Rule_Name] Token_Quote Syntax_Line)
+        {
+            Self_Call = (append '(i Parse_Token My_Elements ' Rule ')');
+            defined [my Rule_Name Fallback_Declaration]
+            {
+                append Declarations [my Rule_Name Fallback_Declaration];
+            }
+        }
+        string Code
+            'comment ' (i Enquote (i Get_Input)) ';' [line]
+            'forever' [line]
+            '{' [line,
+            indent] 'break if (not ' Self_Call ');' [line]
+            '}';
+        defined [my Rule_Name Fallback_Declaration]
+        {
+            my Fallback_Declaration = [my Rule_Name Fallback_Declaration];
+        }
+        my Fallback_Declaration = Declarations;
+        i = Code;
+    }
+
+    generate Syntax_Exclude
+    {
+        debug;
+        string Declarations '';
+        string Args (i Fallback_Args);
+        string Code 'comment ' (i Enquote (i Get_Input)) ';' [line];
+        object Argument;
+        for each Argument in [my Arguments]
+        {
+            defined [. Argument Fallback_Declaration]
+            {
+                append Declarations [Argument.Fallback_Declaration];
+            }
+            comment "rule name tokens are required here, right?";
+            append Code 'return [false] if (i Parse_' [Argument.Fallback] ' Excluded);' [line];
+        }
+        my Fallback_Declaration = Declarations;
+        i = Code;
+    }
+
+    generate Statement_I_Equal
+    {
+        string Property_Name;
+        try
+        {
+            Property_Name = (i Get_Property_Name);
+        }
+        catch
+        {
+            debug;
+        }
+        if (Property_Name is null)
+        {
+            try
+            {
+                Property_Name = (i Get_Language_Name);
+            }
+            catch
+            {
+                debug;
+            }
+        }
+        if (Property_Name is null)
+        {
+            debug;
+        }
+        string Code 'my ' Property_Name ' = ' [my Value Fallback] ';';
+        i = Code;
+    }
+    generate Statement_Verbosity
+    {
+        string Condition '[false]';
+        defined [my Condition]
+        {
+            Condition = [my Condition Fallback];
+        }
+        string Code 'flag Verbose ' Condition ';';
+        i = Code;
+    }
+    generate Statement_Verbose
+        'if Verbose' [line] '{' [line] [indent]
+            'say' (i Fallback_Arguments) ';' [line]
+        '}';
+    generate Statement_Statements
+    {
+        object Arg;
+        object Tail;
+        string Statement 'ERROR_UNKNOWN_STATEMENT';
+        string Keyword 'ERROR_UNKNOWN_KEYWORD';
+        string Code '';
+        for each Tail in [my Arguments]
+        {
+            for each Arg in [Tail.Elements]
+            {
+                if (Arg is a Token_Comma)
+                {
+                    Statement = 'ERROR_UNKNOWN_STATEMENT';
+                    Keyword = 'ERROR_UNKNOWN_KEYWORD';
+                    continue;
+                }
+                if (Arg is a Token_Quote) {
+                    Keyword = [Arg.Fallback];
+                    append Code
+                        '[my Statements] ' Keyword ' d= Element;' [line]
+                        'i Add_Keywords ' Keyword ';' [line];
+                }
+                else if (Arg is a Token_Word) {
+                    Statement = [Arg.Fallback];
+                    append Code
+                        'Element =  (new ' Statement ');' [line]
+                        'push [my Elements] Element;' [line];
+                }
+                else
+                {
+                    error 'unexpected statements argument ' (Arg.Enquote (Arg.Get_Input));
+                }
+            }
+        }
+        i = Code;
+    }
+    generate Statement_Operations
+    {
+        object Arg;
+        object Tail;
+        string Operation 'ERROR_UNKNOWN_OPERATION';
+        string Keyword 'ERROR_UNKNOWN_KEYWORD';
+        string Code '';
+        for each Tail in [my Arguments]
+        {
+            for each Arg in [Tail.Elements]
+            {
+                if (Arg is a Token_Comma)
+                {
+                    Operation = 'ERROR_UNKNOWN_STATEMENT';
+                    Keyword = 'ERROR_UNKNOWN_KEYWORD';
+                    continue;
+                }
+                if (Arg is a Token_Quote) {
+                    Keyword = [Arg.Fallback];
+                    append Code
+                        '[my Operations] ' Keyword ' d= Element;' [line]
+                        'i Add_Keywords ' Keyword ';' [line];
+                }
+                else if (Arg is a Token_Word) {
+                    Operation = [. Arg Fallback];
+                    Keyword = Operation;
+                    append Code
+                        'Element =  (new ' Operation ');' [line]
+                        'push [my Elements] Element;' [line];
+                }
+                else
+                {
+                    error 'unexpected statements argument ' (Arg.Enquote (Arg.Get_Input));
+                }
+            }
+        }
+        i = Code;
+    }
+    generate Statement_Syntaxes
+    {
+        object Arg;
+        object Tail;
+        string Syntax 'ERROR_UNKNOWN_SYNTAX';
+        string Keyword 'ERROR_UNKNOWN_KEYWORD';
+        string Code '';
+        for each Tail in [my Arguments]
+        {
+            for each Arg in [Tail.Elements]
+            {
+                if (Arg is a Token_Comma)
+                {
+                    Syntax = 'ERROR_UNKNOWN_STATEMENT';
+                    Keyword = 'ERROR_UNKNOWN_KEYWORD';
+                    continue;
+                }
+                if (Arg is a Token_Quote) {
+                    Keyword = [Arg.Fallback];
+                    append Code
+                        '[my Syntaxes] ' Keyword ' d= Element;' [line]
+                        'i Add_Keywords ' Keyword ';' [line];
+                }
+                else if (Arg is a Token_Word) {
+                    Syntax = [Arg.Fallback];
+                    append Code
+                        'Element =  (new ' Syntax ');' [line]
+                        'push [my Elements] Element;' [line];
+                }
+                else
+                {
+                    error 'unexpected statements argument ' (Arg.Enquote (Arg.Get_Input));
+                }
+            }
+        }
+        i = Code;
+    }
+
+    generate Declaration_Statement
+    {
+        string Code [my Keyword] ' ' [my Name Fallback];
+        defined [my Value]
+        {
+            append Code ' = ' [my Value Fallback];
+        }
+        append Code ';';
+        i = Code;
+    }
+    generate Statement_Return_If
+    {
+        string Condition [my Condition Fallback];
+        string Code 'return ';
+        if [my Value]
+        {
+            append Code [my Value Fallback] ' ';
+        }
+        append Code 'if ' Condition ';';
+        i = Code;
+    }
+    generate Statement_If_Return
+    {
+        string Code 'if ' [my Condition Fallback] ' return';
+        defined [my Value]
+        {
+            append Code ' ' [my Value Fallback];
+        }
+        append Code ';';
+        i = Code;
+    }
+    generate Statement_Propset
+        Object '.' Property ' = ' Value ';';
+    generate Statement_Assign
+        Destination ' = ' Value ';';
+    generate Statement_List_Copy
+        'list ' Target ' copy of ' Source ';';
+    generate Syntax_Property
+        '[' Object '.' Property_Name (i Fallback_Args) ']';
+    generate Syntax_My
+        '[my ' Property (i Fallback_Args) ']';
+
+    generate Operation_I
+        '(i ' Method (i Fallback_Args) ')';
+    generate Operation_Is_Null
+        '(' Op1 ' is null)';
+    generate Statement_Property
+    {
+        string Type [my Type Fallback];
+        string Name [my Name Fallback];
+        string Code 'property ' Type ' ' Name;
+        defined [my Value]
+        {
+            append Code ' = ' [my Value Fallback];
+        }
+        append Code ';';
+        i = Code;
+    }
+    generate Statement_Call
+        Object '.' Method (i Fallback_Args) ';';
+    generate Operation_Call
+        '(' Object '.' Method (i Fallback_Args) ')';
+    generate Statement_Colon
+        Class_Name ':' Method_Name (i Fallback_Args) ';';
+    generate Operation_Colon
+        '(' Class ':' Method (i Fallback_Args) ')';
+    generate Statement_Append
+        'append' (i Fallback_Arguments) ';';
+    generate Statement_Catch
+        'catch' (i Fallback_Arguments) (i Fallback_Block);
+    generate Statement_Defined
+        'defined ' Expression (i Fallback_Block);
+    generate Statement_Undefined
+        'undefined ' Expression (i Fallback_Block);
+    generate Statement_Dictionary
+        'dictionary ' Name ';';
+    generate Statement_Else
+        'else' (i Fallback_Block);
+
+    generate Statement_Else_If
+        'else if' (i Fallback_Arguments) (i Fallback_Block);
+    generate Operation_Add
+        '(' Op1 ' + ' Op2 (i Fallback_Args) ')';
+    generate Operation_Minus
+    {
+        string Code '';
+        if (llength [my Arguments] > 1)
+        {
+            append Code '(' [my Op1 Fallback] ' - ' [my Op2 Fallback] (i Fallback_Args) ')';
+        }
+        else
+        {
+            append Code '(-' (i Fallback_Arguments) ')';
+        }
+        i = Code;
+    }
+    generate Operation_Multiply
+        '(' Op1 ' * ' Op2 (i Fallback_Args) ')';
+    generate Operation_Divide
+        '(' Op1 ' / ' Op2 (i Fallback_Args) ')';
+    generate Operation_Modulo
+        '(' Op1 ' mod ' Op2 (i Fallback_Args) ')';
+    generate Operation_And
+        '(' Op1 ' and ' Op2 (i Fallback_Args) ')';
+    generate Operation_Or
+        '(' Op1 ' or ' Op2 (i Fallback_Args) ')';
+    generate Statement_Class
+    {
+        string Class_Name [my Class_Name Fallback];
+        string Ancestor '';
+        defined [my Ancestor]
+        {
+            if ([my Ancestor] is a Syntax_Is)
+            {
+                append Ancestor ' ' [my Ancestor Fallback];
+            }
+            else
+            {
+                append Ancestor ' is ' [my Ancestor Fallback];
+            }
+        }
+        string Block (i Fallback_Block);
+        string Append_Stmts '';
+        object Stmt;
+        for each Stmt in [my Appended_Statements]
+        {
+            try
+            {
+                append Append_Stmts [Stmt.Fallback] [line];
+            }
+            catch
+            {
+                append Append_Stmts [Stmt.Gal] [line];
+            }
+        }
+        if (Block sne ';')
+        {
+            string Block_Stmts [my Block Fallback_Statements];
+            Append_Stmts = (i Indent Append_Stmts);
+            Block = (append [line]
+                '{' [line]
+                    Block_Stmts
+                    Append_Stmts
+                '}');
+        }
+        else if (Append_Stmts sgt '')
+        {
+            Append_Stmts = (i Indent Append_Stmts);
+            Block = (append [line]
+                '{' [line]
+                    Append_Stmts
+                '}');
+        }
+        string Code 'class ' Class_Name Ancestor Block;
+        i = Code;
+    }
+    generate Statement_Super
+    {
+        comment `validated once here, then passed through to the atomic
+        unchanged: super may only appear inside a constructor of a class
+        that declares an ancestor. backends render it without re-checking;
+        each constructor generator separately requires it to be the first
+        statement`;
+        object Ctor (i Get_Owner_Constructor);
+        if (Ctor is null)
+        {
+            error 'super must appear inside a constructor';
+        }
+        object Cls (i Get_Owner_Class);
+        string Has_Ancestor '';
+        forgive
+        {
+            comment `the dereference throws when Ancestor is unset (missing
+            attribute or null), under gal2- and gal3-built binaries alike`;
+            string Probe ([Cls.Ancestor].Get_Input);
+            Has_Ancestor = 'y';
+        }
+        if (Has_Ancestor seq '')
+        {
+            error 'super requires the class to declare an ancestor';
+        }
+        string Code 'super' (i Fallback_Args) ';';
+        i = Code;
+    }
+    generate Statement_Class_Method
+    {
+        string Code 'class method' (i Fallback_Arguments) (i Fallback_Block);
+        i = Code;
+    }
+    generate Statement_Write_To
+        'write ' Text ' to file ' File ';';
+    generate Statement_Debug_If
+        'if ' Condition ' { debug; }';
+    generate Operation_Append
+        '(append' (i Fallback_Arguments) ')';
+    generate Statement_Class_Property
+    {
+        string Type [my Type Fallback];
+        string Name [my Name Fallback];
+        string Code 'class property ' Type ' ' Name;
+        defined [my Value]
+        {
+            append Code ' = ' [my Value Fallback];
+        }
+        append Code ';';
+        i = Code;
+    }
+    generate Statement_For_Each_In
+        'for each ' Item ' in ' List (i Fallback_Block);
+    generate Statement_String
+        'string' (i Fallback_Arguments) ';';
+    generate Statement_My_Equal
+        'my ' Property_Name ' = ' Value ';';
+    generate Operation_Contains
+        '(' String ' contains ' Search ')';
+    generate Operation_Is_A
+        '(' Object ' is a' (i Fallback_Args) ')';
+    generate Operation_String_Equal
+        '(' Op1 ' seq ' Op2 ')';
+    generate Operation_Dict_Exists
+        '(' Dictionary ' dexists ' Key ')';
+    generate Operation_Equal
+        '(' Op1 ' eq ' Op2 ')';
+    generate Syntax_Class_Name
+    {
+        string Target '';
+        forgive
+        {
+            Target = [my Object Fallback];
+            append Target ' ';
+        }
+        string Code '[' Target 'class name]';
+        i = Code;
+    }
+    generate Operation_Not_Equal
+        '(' Op1 ' ne ' Op2 ')';
+    generate Operation_Greater
+        '(' Op1 ' gt ' Op2 ')';
+    generate Operation_Less
+        '(' Op1 ' lt ' Op2 ')';
+    generate Operation_Greater_Equal
+        '(' Op1 ' ge ' Op2 ')';
+    generate Operation_Less_Equal
+        '(' Op1 ' le ' Op2 ')';
+    generate Operation_String_Not_Equal
+        '(' Op1 ' sne ' Op2 ')';
+    generate Operation_String_Greater
+        '(' Op1 ' sgt ' Op2 ')';
+    generate Operation_String_Less
+        '(' Op1 ' slt ' Op2 ')';
+    generate Operation_String_Greater_Equal
+        '(' Op1 ' sge ' Op2 ')';
+    generate Operation_String_Less_Equal
+        '(' Op1 ' sle ' Op2 ')';
+    generate Operation_File_Exists
+        '(file ' Path ' exists)';
+    generate Operation_List_Length
+        '(llength ' List ')';
+
+    generate Statement_Dialect
+    {
+        string Name [my Name Fallback];
+        string Ancestor 'Dialect';
+        if (defined [my Ancestor])
+        {
+            Ancestor = (append [my Ancestor Fallback] '_Dialect');
+        }
+        string Body '';
+        string Fback 'my Name = ' (i Enquote Name) ';' [line];
+        object Statement;
+        if (defined [my Block])
+        {
+            for each Statement in [my Block Statements]
+            {
+                if (Statement is a Method_Statement Statement_Main)
+                {
+                    append Body [Statement.Fallback] [line];
+                }
+                else
+                {
+                    if (defined [Statement.Fallback_Declaration])
+                    {
+                        append Body [Statement.Fallback_Declaration] [line];
+                    }
+                    if (defined [Statement.Fallback])
+                    {
+                        append Fback [Statement.Fallback] [line];
+                    }
+                }
+            }
+        }
+        string Method
+            'method flag Initialize'  [line] '{' [line] [indent]
+                'object Element;' [line]
+                (i Indent Fback) [line] [indent]
+                'return [true];' [line]
+                '}';
+
+        Body = (i Indent Body);
+        Method = (i Indent Method);
+        string Code 'class Dialect_' Name ' is ' Ancestor [line] '{' [line]
+                (i Indent Method)
+                (i Indent Body)
+            '}' [line];
+        i = Code;
+    }
+
+    generate Statement_Class_Set
+    {
+        verbosity;
+        string Code '';
+        if (not (defined [my Primary_Class]))
+        {
+            append Code 'class set ' (i Fallback_Arguments) (i Fallback_Block);
+        }
+        verbose 'fallback class set: ' Code;
+        i = Code;
+    }
+
+    generate Statement_List
+        'list' (i Fallback_Arguments) ';';
+
+    generate Statement_I
+        'i' (i Fallback_Arguments) ';';
+
+    generate Statement_Symbol
+    {
+        string Type [my Type Fallback];
+        string Name [my Name Fallback];
+        string Parent_Class "Symbol";
+        defined [my Parent_Class Fallback]
+        {
+            Parent_Class = [my Parent_Class Fallback];
+        }
+        string Block '';
+        string Declaration "";
+        forgive
+        {
+            for each Statement in [my Block Statements]
+            {
+                defined [Statement.Fallback_Declaration]
+                {
+                    append Declaration [Statement.Fallback_Declaration];
+                }
+            }
+        }
+        string Default_Value ' [' Type ' Value [null]]';
+        string Initializer [indent]
+            'if (Value ne [null]) {' [line] [indent 3]
+                'my Symbol_Value = Value;' [line] [indent 2]
+            '}' [line] [indent];
+        if (contains " list dictionary object glvn dict " (append ' ' Type ' '))
+        {
+            Default_Value = "";
+            Initializer = "";
+        }
+        string Code
+            Declaration [line]
+            'class ' Name ' is ' Parent_Class [line] '{' [line] [indent]
+                'property object Symbol_Object;' [line] [indent]
+                'property ' Type ' Symbol_Value;' [line] [indent]
+                'constructor [object Object]' Default_Value [line] [indent] '{' [line] [indent 2]
+                    'my Symbol_Object = Object;' [line] [indent]
+                    Initializer
+                '}' [line]
+                Block
+            '}';
+        i = Code;
+    }
+    generate Statement_Todo
+        'comment "TODO: "' (i Fallback_Arguments) ';';
+    generate Statement_Break_If
+        'if' (i Fallback_Arguments) ' { break; }';
+    generate Statement_Continue_If
+        'if' (i Fallback_Arguments) ' { continue; }';
+    generate Class_Generator_Statement
+    {
+        string Base_Class [my Base_Class];
+        string Class_Name Base_Class '_' [my Class_Name Fallback];
+        string Keyword [my Verb_String Fallback];
+        string Code 'class ' Class_Name ' is ';
+        if (defined [my Parent_Class])
+        {
+            append Code [my Parent_Class Fallback] '_';
+        }
+        append Code Base_Class;
+        append Code [line] '{' [line,
+            indent] "property string Keyword " Keyword ";" [line]
+            [my Block Fallback_Statements];
+        string Declarations '';
+        string Dec;
+        object Stmt;
+        for each Stmt in [my Block Statements]
+        {
+            Dec = [Stmt.Classification Fallback_Declaration];
+            continue if (Stmt s= '');
+            append Declarations Dec [line];
+        }
+        if (Declarations s> '')
+        {
+            Declarations = (i Indent Declarations);
+        }
+        string Attribute_Method
+            'method number Attributes' [line]
+            '{' [line]
+                Declarations
+                [indent]
+                'return 1;' [line]
+            '}' [line];
+        append Code (i Indent Attribute_Method);
+        append Code '}' [line];
+        i= Code;
+    }
+    generate Statement_Keyword
+    {
+        string Argument_Name [my Argument_Name Fallback];
+        string Code 'property object ' Argument_Name ';';
+        string Declaration
+            "if ((llength [my Listargs]) = 0)" [line]
+            "{" [line] [indent]
+                "error 'missing required keyword " Argument_Name "';" [line]
+            "}" [line]
+            'my ' Argument_Name ' = (shift [my Listargs]);' [line];
+        append Declaration [indent] 
+            '[my ' Argument_Name ' Usage] = ' [my Usage Fallback] ';' [line];
+        append Declaration [indent]
+            '[my ' Argument_Name ' Value] = ' [my Data_Type Fallback] ';' [line];
+        my= Fallback_Declaration Declaration;
+        i= Code;
+    }
+    generate Statement_English
+        'comment "ENGLISH: "' (i Fallback_Arguments) ';';
+    generate Statement_Inference
+    {
+        string Code 'comment "inference ' [my Name Fallback] '";' [line];
+        object Stmt;
+        forgive
+        {
+            for each Statement in [my Block Statements]
+            {
+                append Code [Statement.Fallback] [line];
+            }
+        }
+        append Code [line] 'comment "END inference ' [my Name Fallback] '";' [line];
+        i = Code;
+    }
+
+    comment `include statements are resolved by the gal stage; a file that
+    still contains one when it reaches fallback was not produced by the gal
+    compiler. fail loudly instead of passing it downstream.`;
+    generate Statement_Include
+    {
+        error 'include statement in fallback input; includes are resolved by the gal stage (compile the .txt source with gal first)';
+    }
+
+    comment `python-specific elements lower to gal atomics here. these are
+    the equivalency point between python semantics and gal semantics: a
+    future target language that disagrees with the lowering overrides these
+    same classes instead of touching the python-to-gal translator.`;
+    generate Statement_Python_Print
+    {
+        comment `python print separates its arguments with single spaces`;
+        string Code 'say';
+        flag First [true];
+        object Arg;
+        for each Arg in [my Arguments]
+        {
+            if (not First)
+            {
+                append Code " ' '";
+            }
+            append Code ' ' [Arg.Fallback];
+            First = [false];
+        }
+        append Code ';';
+        i = Code;
+    }
+    generate Statement_Python_While
+    {
+        comment `gal has no while loop: forever with an inverted break`;
+        string Code 'forever' [line] '{' [line]
+            [indent] 'break if (not ' [my Condition Fallback] ');' [line]
+            (i Fallback_Statements)
+            '}';
+        i = Code;
+    }
+    generate Statement_Python_For_Range
+    {
+        string Code 'for ' [my Variable Fallback] ' range ';
+        if (defined [my Upper])
+        {
+            comment 'two-argument range: Limit is the start, Upper the end';
+            append Code [my Limit Fallback] ' (' [my Upper Fallback] ' - 1)';
+        }
+        else
+        {
+            append Code '0 (' [my Limit Fallback] ' - 1)';
+        }
+        append Code (i Fallback_Block);
+        i = Code;
+    }
+    generate Statement_Python_Print0
+    {
+        comment `python print with sep='': plain say, no separators`;
+        string Code 'say' (i Fallback_Arguments) ';';
+        i = Code;
+    }
+    generate Statement_Python_Raise
+        'error ' Message ';';
+    generate Operation_Python_Fstr
+    {
+        comment `a python f-string: an append of literal and expression
+        segments, which the target generators render back as an f-string`;
+        string Code '(append' (i Fallback_Arguments) ')';
+        i = Code;
+    }
+    generate Operation_Python_Isa
+    {
+        string Code '(' [my Op1 Fallback] ' is a';
+        object Arg;
+        flag First [true];
+        for each Arg in [my Arguments]
+        {
+            if First
+            {
+                First = [false];
+                continue;
+            }
+            append Code ' ' [Arg.Fallback];
+        }
+        append Code ')';
+        i = Code;
+    }
+    generate Operation_Python_Add
+    {
+        comment `python's + concatenates when a string is involved and
+        adds otherwise; the inferred types choose between the append
+        operation and numeric +. unknown and variant operands keep the
+        numeric form, matching the python behavior for numbers.`;
+        flag Stringish [false];
+        if ((i Fallback_Arg_Data_Type [my Op1]) s= 'string')
+        {
+            Stringish = [true];
+        }
+        if ((i Fallback_Arg_Data_Type [my Op2]) s= 'string')
+        {
+            Stringish = [true];
+        }
+        comment `record the decision as this operation's own data type:
+        operands lower before the operations that contain them, so an
+        enclosing py + reads a chained operand's resolved type in the
+        same pass`;
+        if Stringish
+        {
+            my Data_Type = 'string';
+            i = (append '(append ' [my Op1 Fallback] ' ' [my Op2 Fallback] ')');
+        }
+        else
+        {
+            my Data_Type = 'number';
+            i = (append '(' [my Op1 Fallback] ' + ' [my Op2 Fallback] ')');
+        }
+    }
+    generate Operation_Python_Sub
+        '(' Op1 ' - ' Op2 ')';
+    generate Operation_Python_Mul
+        '(' Op1 ' * ' Op2 ')';
+    generate Operation_Python_Div
+        '(' Op1 ' / ' Op2 ')';
+    generate Operation_Python_Mod
+        '(' Op1 ' mod ' Op2 ')';
+    generate Operation_Python_Lt
+        '(' Op1 ' < ' Op2 ')';
+    generate Operation_Python_Gt
+        '(' Op1 ' > ' Op2 ')';
+    generate Operation_Python_Le
+        '(' Op1 ' <= ' Op2 ')';
+    generate Operation_Python_Ge
+        '(' Op1 ' >= ' Op2 ')';
+    generate Operation_Python_Eq
+        '(' Op1 ' = ' Op2 ')';
+    generate Operation_Python_Ne
+        '(' Op1 ' != ' Op2 ')';
+    generate Operation_Python_And
+        '(' Op1 ' and ' Op2 ')';
+    generate Operation_Python_Or
+        '(' Op1 ' or ' Op2 ')';
+    generate Operation_Python_Not
+        '(not ' Op1 ')';
+    generate Operation_Python_Neg
+        '(0 - ' Op1 ')';
+    generate Operation_Python_Str
+        '(string ' Op1 ')';
+
+    todo 'add more class handlers above this line';
+}
+
+class Fallback_Compiler is Gal_Compiler
+{
+    constructor
+    {
+        my Generator = (new Fallback_Generator [self]);
+    }
+    method number Infer_Code
+    {
+        verbosity;
+        verbose "Fallback_Compiler.Infer_Code: starting code generation";
+        [my Generator Elements] = [my Elements];
+        [my Generator].Infer_Gal;
+        [my Generator].Verbosity = [true];
+        flag Status = ([my Generator].Infer_Fallback);
+        return Status if (Status = 0);
+        verbose "Fallback_Compiler.Infer_Code: calling Generator.Infer_Fallback";
+
+        # 'Call Infer_Fallback to generate the code';
+        [my Generator].Infer_Fallback;
+
+        # 'Get the top-level program element';
+        object Top = (llast [my Elements]);
+
+        verbose "Fallback_Compiler.Infer_Code: ensuring Top element has fallback code";
+
+        undefined [Top.Fallback]
+        {
+            say (i Error_Report);
+            return 0;
+        }
+
+        string Code = [Top.Fallback];
+        my Fallback = Code;
+
+        verbose "Fallback_Compiler.Infer_Code: successfully generated fallback code";
+
+        return 1;
+    }
+}

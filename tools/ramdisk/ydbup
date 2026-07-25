@@ -1,0 +1,7 @@
+#!/bin/bash
+
+mkdir -p /tmp/ramdisk/g
+mkdir -p /tmp/ramdisk/m
+cp $HOME/.yottadb/r2.00_x86_64/g/yottadb.gld /tmp/ramdisk/g/
+export ydb_gbldir=/tmp/ramdisk/g/yottadb.gld
+ydb -r GDE @"$ERIK/scripts/ramdisk.gde"

@@ -1,0 +1,21 @@
+flowerbox 'checkout: the order form, where input from the outside world is always a string, program 5 of the five-languages series';
+
+module Checkout
+{
+    main
+    {
+        integer Price 12;
+        say "coffee: $" Price " per box, plus one free sample box";
+        string Quantity;
+        readline 'how many boxes? ' Quantity;
+        integer Shipped (Quantity + 1);
+        integer Subtotal (Quantity * Price);
+        string Coupon;
+        readline 'coupon value? ' Coupon;
+        integer Total (Subtotal - Coupon);
+        say "shipping " Shipped " boxes";
+        say "subtotal $" Subtotal;
+        say "coupon -$" Coupon;
+        say "total $" Total;
+    }
+}

@@ -1,0 +1,15 @@
+#!/bin/bash
+# Check if ramdisk is already mounted
+if ! grep -q "/tmp/ramdisk" /proc/mounts; then
+    # Create and mount ramdisk only if it doesn't exist
+    mkdir -p /tmp/ramdisk
+    sudo chmod 777 /tmp/ramdisk
+    mount -t tmpfs -o size=16G myramdisk /tmp/ramdisk
+    echo "Ramdisk mounted successfully:"
+    mount | grep "/tmp/ramdisk"
+else
+    echo "Ramdisk already mounted at /tmp/ramdisk"
+fi
+# mkdir -p /tmp/ramdisk/m
+# mkdir -p /tmp/ramdisk/g
+

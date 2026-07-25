@@ -1,0 +1,19 @@
+flowerbox 'python lexer main: tokenize a python source file and dump the token stream';
+main [string Source_File, string Target_File]
+{
+    verbosity;
+    verbose 'python lexer';
+    verbose 'input file: ' Source_File;
+    object C = (new Py_Compiler);
+    C.File_Name = Source_File;
+    number Result = (C.Tokenize);
+    write (C.Token_Report) to Target_File;
+    if (Result > 0)
+    {
+        say 'pylex OK, tokens written to ' Target_File;
+    }
+    else
+    {
+        say 'pylex FAILED';
+    }
+}

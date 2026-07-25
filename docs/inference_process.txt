@@ -1,0 +1,23 @@
+We have an inference to make. We are going to infer the data types.
+Let's try going through the following set of steps.
+
+1. We print a list of the language elements in a program, before the inference.
+
+2. We use an LLM to try to infer the data type of every language element.
+    A human being proofreads this work.
+
+3. We use this as a test case.
+
+4. We write code to try to infer the data type of every class in the language element list.
+
+    - the data type inference has a bunch of 'is a' statements, each adds a method to that class.
+
+    - sideways inheritance, every language element class implements an 'Infer_Data_Type' method and a 'Data_Type' attribute.
+
+5. We record all LLM decisions as possible test cases. We retain test cases based on gratitude. How much do they help us?
+
+6. The outcome and gratitude based biasing system causes us to prefer the most efficient implementation. We write code for what works and it runs faster, and we save the hard things for the LLM.
+
+We record every language element translation that the gal2 compiler and the LLM perform correctly as test cases.
+
+Following this set of steps will make it easy go get through an inference.

@@ -1,0 +1,29 @@
+flowerbox 'regression: a dialect sharing a class name must not take over
+the class-name registry, or class set <name> splices into the dialect and
+its members vanish from the atomic (fixed 2026-07-19)';
+
+module Dcdemo
+{
+    class Base;
+    class Dialect;
+    class Widget
+    {
+        property string Name '';
+    }
+    dialect Widget
+    {
+        english 'a dialect that shares the class name';
+    }
+    class set Widget
+    {
+        method string Extra
+        {
+            return 'extra';
+        }
+    }
+    main
+    {
+        object W = (new Widget);
+        say (W.Extra);
+    }
+}

@@ -1,0 +1,24 @@
+flowerbox 'gal to browser javascript main';
+main [string Source_File, string Target_File]
+{
+    verbosity;
+    verbose 'gal browser javascript compiler';
+    verbose 'input file: ' Source_File;
+    string Report_File Target_File '.elems';
+    object JC = (new Javascript_Browser_Compiler);
+    JC.Initialize;
+    JC.File_Name = Source_File;
+    JC.Code = '<undefined>';
+    number Status = (JC.Infer);
+    if (Status = 0)
+    {
+        say "Error inferring browser javascript code";
+        write (JC.Element_Report) to Report_File;
+    }
+    else
+    {
+        verbose 'code:' [line] [JC.Javascript];
+        [JC.Dialect].Print_Unclassified_Verbs;
+        write [JC.Javascript] to Target_File;
+    }
+}

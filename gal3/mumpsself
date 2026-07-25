@@ -1,0 +1,161 @@
+#!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# mumpsself — emit the MUMPS edition of the gal3 compilers from the _33
+# fixpoint artifacts, then verify the MUMPS chain reproduces every
+# pipeline stage byte-identically (design: ../docs/mumps_design.md).
+#
+# Precondition: a completed ./build && ./selfbuild && ./selfself (the _33
+# artifacts in $BUILD are ground truth), or ./galmumpsbuild for
+# MUMPS-only edits.
+#
+# Usage: ./mumpsself [--keep-going] [--quick] [artifact ...]
+#   default artifacts: gal fallback galpy
+#   --quick: the five contract programs only, skipping the self-source row
+#   --keep-going: survey all failures instead of stopping at the first.
+#
+# MUMPS notes: each artifact compiles to a routine BUNDLE (one routine per
+# class, ;;;ROUTINE markers) which is split into its own directory under
+# $BUILD/mumpsself/, alongside the runtime galrt.m. Every artifact's
+# module routine is CompilerProgram (module Compiler, renamed for the gal
+# class of the same name). Objects live in a local matrix by default; set
+# galmatrix=^X to keep them for retrospective inspection (galdump.m).
+
+source "$(dirname "$(readlink -f "$0")")/../galenv" || exit 1
+
+SRC="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+BUILD="${GAL_BUILD:-$GAL_HOME/gal3build}"
+BIN="$HOME/.gal3"
+W="$BUILD/mumpsself"
+mkdir -p "$W"
+
+if ! command -v mumps >/dev/null 2>&1; then
+    if [ -r /usr/local/etc/ydb_env_set ]; then
+        source /usr/local/etc/ydb_env_set > /dev/null 2>&1
+    fi
+fi
+if ! command -v mumps >/dev/null 2>&1; then
+    echo "mumpsself: yottadb not found (source /usr/local/etc/ydb_env_set)"; exit 1
+fi
+
+KEEP_GOING=0
+QUICK=0
+ARTIFACTS=""
+for A in "$@"; do
+    case "$A" in
+        --keep-going) KEEP_GOING=1 ;;
+        --quick) QUICK=1 ;;
+        *) ARTIFACTS="$ARTIFACTS $A" ;;
+    esac
+done
+[ -z "$ARTIFACTS" ] && ARTIFACTS="gal fallback galpy"
+
+FAIL=0
+CHECKS=0
+note() { echo "    $*"; }
+fail() {
+    echo "    FAIL: $*"
+    FAIL=$((FAIL+1))
+    [ "$KEEP_GOING" = 1 ] || exit 1
+}
+
+# ---------------------------------------------------------------- phase A
+# emit and split each artifact's routine bundle. a bundle that fails to
+# zlink is caught on first use in phase B; emitting is the cheap gate.
+echo "phase A: emitting mumps routine bundles"
+for A in $ARTIFACTS; do
+    ATOMIC="$BUILD/${A}_3.atomic"
+    [ -r "$ATOMIC" ] || ATOMIC="$BUILD/${A}_33.atomic"
+    if [ ! -r "$ATOMIC" ]; then
+        fail "$A: no atomic in $BUILD (run ./build && ./selfbuild && ./selfself)"
+        continue
+    fi
+    D="$W/$A"
+    rm -rf "$D"; mkdir -p "$D"
+    if ! python "$BIN/galmumps_33.py" "$ATOMIC" "$D/bundle.m" > "$D/emit.log" 2>&1; then
+        fail "$A: galmumps did not emit a bundle"; continue
+    fi
+    awk -v dir="$D" '/^;;;ROUTINE /{f=dir"/"$2".m"; next} f{print > f}' "$D/bundle.m"
+    cp "$SRC/bin/galrt.m" "$D/"
+    N=$(ls "$D"/*.m 2>/dev/null | wc -l)
+    note "$A: $N routines"
+done
+
+# ---------------------------------------------------------------- phase B
+# run each artifact's stage under yottadb and require byte-identical
+# output against the python-hosted stage.
+run_m() {  # run_m <artifact-dir> <in> <out>
+    local dir="$1" in="$2" out="$3"
+    rm -f "$out"
+    ( export ydb_routines="$dir $ydb_routines"; unset galmatrix
+      timeout 1800 mumps -run CompilerProgram "$in" "$out" ) > "$out.log" 2>&1
+    [ -s "$out" ]
+}
+
+check() {  # check <label> <reference> <candidate>
+    CHECKS=$((CHECKS+1))
+    if cmp -s "$2" "$3"; then
+        note "ok  $1"
+    else
+        fail "$1: differs from the python-hosted stage"
+        diff "$2" "$3" 2>/dev/null | head -6
+    fi
+}
+
+echo "phase B: verifying the mumps-hosted pipeline"
+PROGRAMS="examples/example.txt examples/fizzbuzz.txt examples/bank.txt examples/receipt.txt examples/checkout.txt"
+[ "$QUICK" = 1 ] || PROGRAMS="$PROGRAMS $BUILD/gal_33.tx2"
+
+for P in $PROGRAMS; do
+    IN="$P"; [ -r "$IN" ] || IN="$SRC/$P"
+    NAME="$(basename "$IN" | sed 's/\.[^.]*$//')"
+    R="$W/ref_$NAME"; C="$W/got_$NAME"
+
+    # reference: the python-hosted chain
+    python "$BIN/gal_33.py" "$IN" "$R.gal" > /dev/null 2>&1
+    cp "$R.gal" "$R.fb"
+    for n in 0 1 2 3 4; do
+        python "$BIN/fallback_33.py" "$R.fb" "$R.fb$n" > /dev/null 2>&1
+        cmp -s "$R.fb" "$R.fb$n" && break
+        cp "$R.fb$n" "$R.fb"
+    done
+    python "$BIN/galpy_33.py" "$R.fb" "$R.py" > /dev/null 2>&1
+
+    # candidate: the same chain, every stage hosted in mumps
+    for A in $ARTIFACTS; do
+        case "$A" in
+            gal)
+                run_m "$W/gal" "$IN" "$C.gal" || { fail "$NAME: gal stage produced nothing"; continue 2; }
+                check "$NAME gal" "$R.gal" "$C.gal" ;;
+            fallback)
+                [ -s "$C.gal" ] || cp "$R.gal" "$C.gal"
+                cp "$C.gal" "$C.fb"
+                for n in 0 1 2 3 4; do
+                    run_m "$W/fallback" "$C.fb" "$C.fb$n" || { fail "$NAME: fallback stage produced nothing"; continue 3; }
+                    cmp -s "$C.fb" "$C.fb$n" && break
+                    cp "$C.fb$n" "$C.fb"
+                done
+                check "$NAME fallback" "$R.fb" "$C.fb" ;;
+            galpy)
+                [ -s "$C.fb" ] || cp "$R.fb" "$C.fb"
+                run_m "$W/galpy" "$C.fb" "$C.py" || { fail "$NAME: galpy stage produced nothing"; continue 2; }
+                check "$NAME galpy" "$R.py" "$C.py"
+                # the emitted python must also RUN identically: byte-identical
+                # source is the structural gate, matching output the real one
+                if [ -s "$C.py" ] && [ -s "$R.py" ]; then
+                    CHECKS=$((CHECKS+1))
+                    A_OUT=$(printf '3\n5\n' | env PYTHONPATH="$BIN" python "$R.py" 2>&1)
+                    B_OUT=$(printf '3\n5\n' | env PYTHONPATH="$BIN" python "$C.py" 2>&1)
+                    if [ "$A_OUT" = "$B_OUT" ]; then note "ok  $NAME galpy output"
+                    else fail "$NAME: emitted python runs differently"; fi
+                fi ;;
+        esac
+    done
+done
+
+echo
+if [ "$FAIL" = 0 ]; then
+    echo "mumpsself: GREEN — $CHECKS checks, the mumps-hosted chain matches the python host"
+    exit 0
+fi
+echo "mumpsself: $FAIL of $CHECKS checks failed"
+exit 1

@@ -1,0 +1,43 @@
+flowerbox 'data type conversion demo: one program, three targets, three different amounts of type work';
+
+comment `
+This program deliberately raises data type conversion issues, so that
+generating it into Python, JavaScript and C illustrates how differently
+the three targets must treat the Data_Type and Usage properties.
+
+say with mixed arguments: Python and JavaScript stringify embedded
+values in their string templates for free; C must build a printf format
+string from each argument's definitional type - %d, %g, %s.
+
+a string variable in a numeric operation: Digits + 8. Python raises a
+TypeError without an int() conversion; JavaScript silently concatenates
+'42' + 8 into '428' without a Number() conversion; C needs atoi. The
+inference marks Digits as a string inside a numeric operation, and each
+generator decides what that requires.
+
+a number used as a string: append Message Cost. free in Python and
+JavaScript templates; C needs sprintf.
+`;
+
+main
+{
+    integer X 1;
+    integer N 3;
+    string Task 'reports';
+    say "There are " X " out of " N " of the " Task " remaining.";
+    number Price 2.5;
+    number Cost (N * Price);
+    string Message 'total cost ';
+    append Message Cost;
+    say Message;
+    number Sum (N + Price);
+    say 'sum ' Sum;
+    string Digits '42';
+    integer Answer (Digits + 8);
+    say 'answer ' Answer;
+    flag Done (Answer > 40);
+    if Done
+    {
+        say 'done';
+    }
+}

@@ -1,0 +1,512 @@
+# Structure Inference Implementation Plan
+
+## Overview
+The `Infer_Structure` method is responsible for building the hierarchical structure of program elements and establishing relationships between them. As discussed, this is a top-down inference process where we start at the end of the element list and iterate backward to ensure that owner elements are processed first.
+
+## Purpose
+- Build hierarchical structure of program elements
+- Establish parent-child relationships 
+- Create links between semantically related elements (if-else, try-catch)
+- Enable contextual queries for innermost class/method/function
+
+## Implementation Using Inference Process
+
+The compiler class has an Infer_Structure method that calls the other elements in reverse order, because it is a top-down inference where the parent object has to tell its children, and information flows "downhill" from the parent to the child.
+
+We want all the Structure inference methods to be in a single module. We could achieve the following with a class append statement or class set statement.
+
+```gal
+class set Compiler
+{
+    method number Infer_Structure
+    {
+        verbosity [true];
+        verbose [class name] ' begins inferring structure';
+        objects Elem CurrentElem;
+        flag Status [true];
+        integer ElementCount = (llength [my Elements]);
+        integer N;
+        integer L = (ElementCount - 1);
+        for N range L 0 -1
+        {
+            CurrentElem = (lget [my Elements] N);
+            CurrentElem.Infer_Structure;
+        }
+        return Status;
+    }
+}
+```
+
+So I could put the above into the structure_inference.txt file in the gal3 directory. However I have instead opted to use an inference statement. It will fall back into the above code.
+
+```gal
+inference Structure
+{
+    handle Compiler
+    {
+        verbosity [true];
+        verbose [class name] ' begins inferring structure';
+        objects Elem CurrentElem;
+        flag Status [true];
+
+        comment Print the language elements for analysis;
+        if [my Debug_Mode] { console "Analyzing elements for structure inference..."; }
+        integer ElementCount = (llength [my Elements]);
+        if [my Debug_Mode] { console "Found " ElementCount " elements to process"; }
+
+        comment 'First pass: establish direct parent-child relationships';
+        comment 'Working from right to left (end to beginning) to ensure all';
+        comment 'component elements are processed before their owners';
+        integer N;
+
+        integer L = (ElementCount - 1);
+        if [my Debug_Mode] { console "Processing elements in reverse order (index " L " to 0)"; }
+
+        for N range L 0 -1
+        {
+            CurrentElem = (lget [my Elements] N);
+            CurrentElem.Infer_Structure;
+        }
+
+        if [my Debug_Mode] { console "Structure inference complete"; }
+        verbose [class name] ' completed inferring structure';
+        return Status;
+    }
+    comment `... other handler statements go here, and each one will generate its own class append and method statement.`;
+}
+```
+
+There need to be some specific class append statements to add capabilities that rely on the Structure inference. I put those next.
+
+    - get the innermost class of any language element, relying on structure. Then if a language element like the [class name] or [our] or [us] syntaxes need to know what class they are inside, they can find that out.
+
+    - allow variable reference statements and variable declaration statements to get their variable context language element, which contains a 'Variables' dictionary, so we can look up the variable definition we are referring to.
+
+    - association between if, else if and else statements. When compiling to MUMPS, there needs to be a 'goto' statement that goes to the next else, or that goes to the end of the if/else block. We need these connections for that.
+
+    - association between try and catch statements. When compiling to MUMPS, there likewise needs to be a GOTO to handle the catch exception, or to bypass the catch after the try has completed successfully. This is one example of how that information could be useful.
+
+    - in the future, as new language elements have structural requirements, we can update the structure inference to add handler methods that rely on that capability. If we decided not to use the structure inference, then none of these capabilities would exist, so it's useful to isolate all these things in the same gal file.
+
+```gal
+class append Element
+{
+    method void Next_Element [object Next];
+    method object Get_Innermost_Class
+    {
+        if (defined [my Parent])
+        {
+            return ([my Parent].Get_Innermost_Class);
+        }
+        return [null];
+    }
+    method object Get_Variable_Context
+    {
+        if (defined [my Parent])
+        {
+            return ([my Parent].Get_Variable_Context);
+        }
+        return [null];
+    }
+}
+class append If_Statement
+{
+    property object Next_Else [null];
+    method void Next_Element [object Next]
+    {
+        my Next_Else = Next;
+    }
+}
+class append Try_Statement
+{
+    property object Next_Catch [null];
+    method void Next_Element [object Next]
+    {
+        my Next_Catch = Next;
+    }
+}
+
+class append Class_Statement
+{
+    property dictionary Variables;
+    method object Get_Innermost_Class
+    {
+        return [self];
+    }
+    method object Get_Variable_Context
+    {
+        return [self];
+    }
+}
+class append Method_Statement
+{
+    property dictionary Variables;
+    method object Get_Variable_Context
+    {
+        return [self];
+    }
+}
+class append Function_Statement
+{
+    property dictionary Variables;
+    method object Get_Variable_Context
+    {
+        return [self];
+    }
+}
+```
+
+So the inference statement in gal3 defines the method Infer_Structure, and it contains a bunch of handle methods that define the class Element, Token etc.
+
+Normally you define the class on the outside, and the methods go inside the class. In sideways inheritance, the inference statement defines the method, and it contains the handle statements that define the class. This is possible to do in gal. It allows us to define a capability in a module, without cluttering the class definitions with all those details.
+
+It has the downside that the class definition does not show us all the capabilities of the class. We have to go looking at the inferences to find additional capabilities.
+
+```gal
+inference Structure
+{
+    # 'Compiler handler was already mentioned, and gloes here.';
+    handle Element;
+    handle Token;
+    handle Spell
+    {
+        object Arg;
+        for each Arg in [my Arguments]
+        {
+            Arg.Parent = [self];
+        }
+    }
+    handle Statement
+    {
+        [my Block Parent] = [self];
+        object Elem;
+        for each Elem in [my Arguments]
+        {
+            Elem.Parent = [self];
+        }
+        object Prev = [null];
+        for each Elem in [my Block Statements]
+        {
+            Elem.Parent = [self];
+            if Prev
+            {
+                Prev.Next_Element Elem;
+            }
+            Prev = Elem;
+        }
+    }
+}
+
+# structure inference ends here;
+method number Infer_Structure
+{
+    verbosity [true];
+    verbose [class name] ' begins inferring structure';
+    
+    # Print the language elements
+    object Elem;
+    for each Elem in [my Elements]
+    {
+        verbose "Structure element: " [Elem.To_String];
+    }
+    
+    # Continue with inference...
+    return 1;
+}
+```
+
+### Step 2: LLM-Assisted Inference with Human Validation
+The LLM can analyze the elements to establish the structure and relationships. Key points to consider:
+
+1. This is a top-down inference - iterate through elements in reverse order
+2. Each element should have:
+   - Parent reference (except top-level elements)
+   - Class context (innermost class it belongs to)
+   - Method/function context (innermost method it belongs to)
+   - Namespace/module context
+
+3. Special relationship tracking:
+   - If-else if-else chains
+   - Try-catch blocks
+   - Loops and their breaks/continues
+
+LLM-suggested implementation:
+
+I am leaving this here to show the contrast between the gal implementation and the conventional implementation. It is simpler and more elegant in gal. Then again, I have been doing this a long time and I have already tried it this way shown below in the past.
+
+```gal
+method number Infer_Structure
+{
+    verbosity [true];
+    verbose [class name] ' begins inferring structure';
+    
+    # Track important contexts
+    dictionary Class_Contexts;    # Store class contexts by position
+    dictionary Method_Contexts;   # Store method contexts by position
+    dictionary Module_Contexts;   # Store module contexts by position
+    dictionary If_Statements;     # Store if statements to link with else/else if
+    dictionary Try_Statements;    # Store try statements to link with catch
+    
+    # First pass: establish direct parent-child relationships
+    # Working from right to left (end to beginning) to ensure all 
+    # component elements are processed before their owners
+    integer N L;
+    object Elem CurrentElem;
+    
+    L = ((llength [my Elements]) - 1);
+    for N range L 0 -1
+    {
+        CurrentElem = (lget [my Elements] N);
+        continue if (not (CurrentElem is a Spell));
+        
+        # Process block statements
+        if ((CurrentElem is a Statement) and (defined [CurrentElem.Block]))
+        {
+            [CurrentElem.Block].Parent = CurrentElem;
+            [CurrentElem.Block].Parent_Class = [CurrentElem.Parent_Class];
+            [CurrentElem.Block].Parent_Method = [CurrentElem.Parent_Method];
+            [CurrentElem.Block].Parent_Module = [CurrentElem.Parent_Module];
+            
+            # Process statements within the block
+            object BlockStmt;
+            for each BlockStmt in [CurrentElem.Block Statements]
+            {
+                BlockStmt.Parent = [CurrentElem.Block];
+                BlockStmt.Parent_Class = [CurrentElem.Parent_Class];
+                BlockStmt.Parent_Method = [CurrentElem.Parent_Method];
+                BlockStmt.Parent_Module = [CurrentElem.Parent_Module];
+            }
+        }
+        
+        # Track class contexts
+        if (CurrentElem is a Class_Statement)
+        {
+            Class_Contexts (CurrentElem.Start_Position) d= CurrentElem;
+            CurrentElem.Parent_Class = CurrentElem;  # A class is its own class context
+        }
+        
+        # Track method contexts
+        if ((CurrentElem is a Method_Statement) or (CurrentElem is a Constructor_Statement))
+        {
+            Method_Contexts (CurrentElem.Start_Position) d= CurrentElem;
+            CurrentElem.Parent_Method = CurrentElem;  # A method is its own method context
+        }
+        
+        # Track conditional relationships
+        if (CurrentElem is a Statement_If)
+        {
+            If_Statements (CurrentElem.Start_Position) d= CurrentElem;
+        }
+        else if ((CurrentElem is a Statement_Else) or (CurrentElem is a Statement_Else_If))
+        {
+            i Find_Parent_If CurrentElem If_Statements;
+        }
+        
+        # Track try-catch relationships
+        if (CurrentElem is a Statement_Try)
+        {
+            Try_Statements (CurrentElem.Start_Position) d= CurrentElem;
+        }
+        else if (CurrentElem is a Statement_Catch)
+        {
+            i Find_Parent_Try CurrentElem Try_Statements;
+        }
+    }
+    
+    verbose [class name] ' completed inferring structure';
+    return 1;
+}
+
+# Helper methods for finding related statements
+method number Find_Parent_If [object ElseStmt, dictionary IfDict]
+{
+    object ParentBlock = [ElseStmt.Parent];
+    if (ParentBlock is null)
+    {
+        return 0;
+    }
+    
+    object ParentStmt = [ParentBlock.Parent];
+    if (ParentStmt is null)
+    {
+        return 0;
+    }
+    
+    # Try to find the closest if statement before this else
+    integer Pos P;
+    Pos = [ElseStmt.Start_Position];
+    
+    # Walk the dictionary backward to find the closest if statement
+    list KeyList = (dkeys IfDict);
+    sort KeyList;
+    
+    for each P in KeyList
+    {
+        continue if (P >= Pos);  # Skip positions after our else
+        
+        object IfStmt = (IfDict dget P);
+        ElseStmt.If_Statement = IfStmt;
+        
+        # Add this else to the if's list of else statements
+        try
+        {
+            push [IfStmt.Else_Statements] ElseStmt;
+        }
+        catch
+        {
+            IfStmt.Else_Statements = [new list];
+            push [IfStmt.Else_Statements] ElseStmt;
+        }
+        
+        return 1;
+    }
+    
+    return 0;
+}
+
+method number Find_Parent_Try [object CatchStmt, dictionary TryDict]
+{
+    # Similar to Find_Parent_If but for try-catch
+    object ParentBlock = [CatchStmt.Parent];
+    if (ParentBlock is null)
+    {
+        return 0;
+    }
+    
+    object ParentStmt = [ParentBlock.Parent];
+    if (ParentStmt is null)
+    {
+        return 0;
+    }
+    
+    # Try to find the closest try statement before this catch
+    integer Pos P;
+    Pos = [CatchStmt.Start_Position];
+    
+    # Walk the dictionary backward to find the closest try statement
+    list KeyList = (dkeys TryDict);
+    sort KeyList;
+    
+    for each P in KeyList
+    {
+        continue if (P >= Pos);  # Skip positions after our catch
+        
+        object TryStmt = (TryDict dget P);
+        CatchStmt.Try_Statement = TryStmt;
+        
+        # Add this catch to the try's list of catch statements
+        try
+        {
+            push [TryStmt.Catch_Statements] CatchStmt;
+        }
+        catch
+        {
+            TryStmt.Catch_Statements = [new list];
+            push [TryStmt.Catch_Statements] CatchStmt;
+        }
+        
+        return 1;
+    }
+    
+    return 0;
+}
+
+# Recursive methods to get context information
+method object Get_Innermost_Class [object Elem]
+{
+    if (defined [Elem.Parent_Class])
+    {
+        return [Elem.Parent_Class];
+    }
+    
+    if (defined [Elem.Parent])
+    {
+        return (Get_Innermost_Class [Elem.Parent]);
+    }
+    
+    return [null];
+}
+
+method object Get_Innermost_Method [object Elem]
+{
+    if (defined [Elem.Parent_Method])
+    {
+        return [Elem.Parent_Method];
+    }
+    
+    if (defined [Elem.Parent])
+    {
+        return (Get_Innermost_Method [Elem.Parent]);
+    }
+    
+    return [null];
+}
+
+method object Get_Innermost_Module [object Elem]
+{
+    if (defined [Elem.Parent_Module])
+    {
+        return [Elem.Parent_Module];
+    }
+    
+    if (defined [Elem.Parent])
+    {
+        return (Get_Innermost_Module [Elem.Parent]);
+    }
+    
+    return [null];
+}
+```
+
+### Step 3: Create Test Cases
+
+After human validation, we'll create test cases such as:
+- Simple parent-child relationships
+- Class nested inside another class
+- Method nested inside a class
+- If-else relationship establishment
+- Try-catch relationship establishment
+
+These test cases will verify both the basic structural relationships and the more complex semantic relationships.
+
+### Step 4: Implement Traditional Code
+
+For performance, we'll implement the most common patterns in traditional code:
+- Basic parent-child relationship establishment
+- Class/method/function context tracking
+- Simple if-else and try-catch linking
+
+### Step 5: Reserve Complex Reasoning for LLM
+
+We'll use the LLM for:
+- Unusual nesting patterns
+- Complex control flow relationships
+- Ambiguous structure resolution
+- Error detection and correction in structure
+
+## Element Properties Added During Structure Inference
+
+1. **Parent Relationships**
+   - `Parent` - The immediate parent element
+   - `Parent_Class` - The innermost class context
+   - `Parent_Method` - The innermost method/function context
+   - `Parent_Module` - The containing module/namespace
+
+2. **Control Flow Relationships**
+   - `If_Statement` - For else/else-if, points to the corresponding if statement
+   - `Else_Statements` - For if statements, list of corresponding else/else-if statements
+   - `Try_Statement` - For catch blocks, points to the corresponding try statement
+   - `Catch_Statements` - For try blocks, list of corresponding catch statements
+
+3. **Helper Methods**
+   - `Get_Innermost_Class` - Returns the innermost class by traversing parents
+   - `Get_Innermost_Method` - Returns the innermost method by traversing parents
+   - `Get_Innermost_Module` - Returns the innermost module by traversing parents
+
+## Result Collection and Performance Monitoring
+
+We'll log the results of each inference operation for:
+- Analysis of structure detection accuracy
+- Performance measurement
+- Creation of test cases for future runs
+- Application of gratitude-based selection for optimal implementation

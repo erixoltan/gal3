@@ -1,0 +1,10 @@
+flowerbox 'gal compiler plugins. this file is a bare statement list (no
+module wrapper): the plugs script compiles it to gal_compiler_plugins.gal,
+and the include statement splices that .gal text into the plug artifacts
+inside module Compiler. compiling to .gal first resolves any nested
+includes, so the .gal form is always include-free. each plugin is itself a
+bare statement list, pre-compiled to its .gal form by plugs before this
+manifest is compiled. the Documentation dialect (articles about gal written
+as gal programs; see generalabstractlanguage.com/src) is the first plugin.';
+
+include "Documentation";

@@ -1,0 +1,523 @@
+flowerbox 'normalized python generator: regenerate parsed python elements as normalized source';
+
+comment `
+Step 6 of the design: normalized regeneration. Because the parse tree is a
+CST that kept every token, one generic generator covers all element classes:
+an element regenerates as its children joined by a token-pair spacing
+policy, and a token regenerates as its text. Block structure is generic too:
+the synthetic Py_Indent / Py_Dedent leaves bracket the interior, which gets
+each line prefixed with one four-space level by a quote-aware indenter, so
+triple-quoted string interiors are never touched. Specific overrides are
+added per element class only where normalized layout is context dependent,
+and the abstract base classes emitted for multi-alternative rules give those
+overrides a stable name that reaches every alternative through inheritance.
+
+The oracle is two mechanical checks per corpus file: regeneration must be
+idempotent (normalizing the normalized output reproduces it byte for byte),
+and CPython must agree the meaning is unchanged (ast.dump equality).
+`;
+
+class set Element
+{
+    property string Normpy;
+    property string Normpy_First '';
+    property string Normpy_Last '';
+    property list Normpy_Leads;
+    property list Normpy_Trails;
+
+    method string Normpy_Trim [string T]
+    {
+        forever
+        {
+            integer L (length T);
+            break if (L = 0);
+            string C (substring T (L - 1) 1);
+            break if ((C sne ' ') and (C sne [tab]));
+            T = (substring T 0 (L - 1));
+        }
+        return T;
+    }
+
+    method flag Normpy_Is_Keyword [string T]
+    {
+        string K ' False None True and as assert async await break class continue def del elif else except finally for from global if import in is lambda nonlocal not or pass raise return while with yield ';
+        return (contains K (append ' ' T ' '));
+    }
+
+    method flag Normpy_Is_Name [string T]
+    {
+        return [false] if (T seq '');
+        string C (substring T 0 1);
+        return (contains 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_0123456789' C);
+    }
+
+    method string Normpy_Glue [string L, string R]
+    {
+        comment `the token-pair spacing policy: decide the whitespace between
+        the last token of the left neighbor and the first token of the right.
+        empty boundaries mean an invisible neighbor such as a newline.`;
+        return '' if (L seq '');
+        return '' if (R seq '');
+        if (contains ' ( [ { . ~ ' (append ' ' L ' '))
+        {
+            return '';
+        }
+        if (contains ' , : ; ) ] } . ' (append ' ' R ' '))
+        {
+            return '';
+        }
+        if ((R seq '(') or (R seq '['))
+        {
+            comment `calls and subscripts bind tight to names and closers,
+            but keywords keep their space: return (x), not return(x)`;
+            return '' if ((L seq ')') or (L seq ']'));
+            if (not (i Normpy_Is_Keyword L))
+            {
+                return '' if (i Normpy_Is_Name L);
+            }
+        }
+        return ' ';
+    }
+
+    method string Normpy_Indent_Text [string Text]
+    {
+        comment `prefix each line with one indent level, tracking python string
+        quotes including escapes so triple-quoted interiors stay untouched`;
+        return '' if (Text seq '');
+        dictionary Qend;
+        Qend '"' d= '"';
+        Qend "'" d= "'";
+        Qend '"""' d= '"""';
+        Qend "'''" d= "'''";
+        integer P;
+        string C;
+        string C3;
+        string I '';
+        flag Quote [false];
+        flag In_Comment [false];
+        string Q '';
+        string Between [indent];
+        integer E = ((length Text) - 1);
+        integer Skip = 0;
+        for P range 0 E
+        {
+            C = (substring Text P 1);
+            C3 = (substring Text P 3);
+            append I Between C;
+            Between = '';
+            if (Skip > 0)
+            {
+                Skip = (Skip - 1);
+            }
+            else if In_Comment
+            {
+                comment `a comment runs to end of line and its quote characters
+                must not open phantom strings: comments are preserved verbatim`;
+                if (C = [line])
+                {
+                    In_Comment = [false];
+                    if (P < E)
+                    {
+                        Between = [indent];
+                    }
+                }
+            }
+            else if Quote
+            {
+                if (C s= '\')
+                {
+                    Skip = 1;
+                }
+                else if (C3 s= Q)
+                {
+                    Quote = [false];
+                    Q = '';
+                    Skip = ((length C3) - 1);
+                }
+                else if (C s= Q)
+                {
+                    Quote = [false];
+                    Q = '';
+                }
+            }
+            else if (C s= '#')
+            {
+                In_Comment = [true];
+            }
+            else if (C = [line])
+            {
+                if (P < E)
+                {
+                    Between = [indent];
+                }
+            }
+            else if (Qend dexists C3)
+            {
+                Quote = [true];
+                Q = C3;
+                Skip = 2;
+            }
+            else if (Qend dexists C)
+            {
+                Quote = [true];
+                Q = C;
+            }
+        }
+        return I;
+    }
+
+    method string Normpy_Concat [flag Tight]
+    {
+        comment `join child regenerations with the spacing policy. a
+        Py_Indent child opens an interior capture that a Py_Dedent child
+        closes by indenting the captured text one level.`;
+        string Code '';
+        string Sub '';
+        flag Capturing [false];
+        string Last '';
+        string First '';
+        flag Have [false];
+        object Child;
+        for each Child in [my Elements]
+        {
+            if (Child is a Py_Indent)
+            {
+                Capturing = [true];
+                continue;
+            }
+            if (Child is a Py_Dedent)
+            {
+                Capturing = [false];
+                append Code (i Normpy_Indent_Text Sub);
+                Sub = '';
+                Last = '';
+                continue;
+            }
+            string Part [Child.Normpy];
+            continue if (Part seq '');
+            string Glue '';
+            if (Have and (not Tight))
+            {
+                Glue = (i Normpy_Glue Last [Child.Normpy_First]);
+            }
+            if Capturing
+            {
+                append Sub Glue Part;
+            }
+            else
+            {
+                append Code Glue Part;
+            }
+            Last = [Child.Normpy_Last];
+            if (not Have)
+            {
+                First = [Child.Normpy_First];
+            }
+            Have = [true];
+        }
+        if (Sub sgt '')
+        {
+            append Code (i Normpy_Indent_Text Sub);
+        }
+        my Normpy_First = First;
+        my Normpy_Last = Last;
+        return Code;
+    }
+}
+
+generator Normpy
+{
+    generate Py_Token
+    {
+        string T [my Text];
+        if ((llength [my Normpy_Leads]) > 0)
+        {
+            comment `leading comments become their own lines directly before
+            this token; when the token sits in a block interior, the indent
+            capture prefixes the comment lines automatically`;
+            string Pre '';
+            string L;
+            for each L in [my Normpy_Leads]
+            {
+                append Pre L [line];
+            }
+            T = (append Pre T);
+        }
+        my Normpy_First = [my Text];
+        my Normpy_Last = [my Text];
+        i = T;
+    }
+
+    generate Py_Newline
+    {
+        string T '';
+        string C;
+        for each C in [my Normpy_Trails]
+        {
+            append T '  ' C;
+        }
+        for each C in [my Normpy_Leads]
+        {
+            append T '  ' C;
+        }
+        append T [line];
+        my Normpy_First = '';
+        my Normpy_Last = '';
+        i = T;
+    }
+
+    generate Py_Indent
+    {
+        my Normpy_First = '';
+        my Normpy_Last = '';
+        i = '';
+    }
+
+    generate Py_Dedent
+    {
+        my Normpy_First = '';
+        my Normpy_Last = '';
+        i = '';
+    }
+
+    generate Py_Endmarker
+    {
+        string T '';
+        string C;
+        for each C in [my Normpy_Leads]
+        {
+            append T C [line];
+        }
+        for each C in [my Normpy_Trails]
+        {
+            append T C [line];
+        }
+        my Normpy_First = '';
+        my Normpy_Last = '';
+        i = T;
+    }
+
+    generate Py_Rule
+    {
+        i = (i Normpy_Concat [false]);
+    }
+
+    generate Python_factor
+    {
+        comment `unary + - ~ bind tight to their operand`;
+        i = (i Normpy_Concat [true]);
+    }
+
+    generate Python_power
+    {
+        i = (i Normpy_Concat [true]);
+    }
+
+    generate Python_slice
+    {
+        i = (i Normpy_Concat [true]);
+    }
+
+    generate Python_kwarg_or_starred
+    {
+        i = (i Normpy_Concat [true]);
+    }
+
+    generate Python_kwarg_or_double_starred
+    {
+        i = (i Normpy_Concat [true]);
+    }
+
+    generate Python_starred_expression
+    {
+        i = (i Normpy_Concat [true]);
+    }
+
+    generate Python_decorators
+    {
+        i = (i Normpy_Concat [true]);
+    }
+
+    generate Python_default
+    {
+        comment `parameter defaults are tight per PEP 8, except when the
+        parameter carries an annotation: def f(x=3) but def f(x: int = 3).
+        an empty first boundary makes the parent glue tight on the left.`;
+        flag Tight [true];
+        forgive
+        {
+            object Par [my Parent];
+            object Sib;
+            for each Sib in [Par.Elements]
+            {
+                if (Sib is a Python_param)
+                {
+                    object PC;
+                    for each PC in [Sib.Elements]
+                    {
+                        if (PC is a Python_annotation)
+                        {
+                            Tight = [false];
+                        }
+                    }
+                }
+            }
+        }
+        string Code (i Normpy_Concat Tight);
+        if Tight
+        {
+            my Normpy_First = '';
+        }
+        i = Code;
+    }
+}
+
+class Pygen_Compiler is Py_Parse_Compiler
+{
+    property object Generator (new Normpy_Generator [self]);
+
+    method void Set_Parents [object Elem]
+    {
+        forgive
+        {
+            object Child;
+            for each Child in [Elem.Elements]
+            {
+                Child.Parent = Elem;
+                if (not (Child is a Token))
+                {
+                    i Set_Parents Child;
+                }
+            }
+        }
+    }
+
+    method void Attach_Comments
+    {
+        comment `the 6.5 default heuristic: a comment on the same physical
+        line as code trails that line and rides on its ending newline token;
+        a comment on its own line leads the next statement and rides on its
+        first emitted token. comments inside brackets would be joined away,
+        so they fold into the logical line's trailing comments.`;
+        integer TI 0;
+        integer NT (llength [my Tokens]);
+        object C;
+        for each C in [my Trivia]
+        {
+            continue if (not (C is a Py_Comment));
+            string Text (i Normpy_Trim [C.Text]);
+            forever
+            {
+                break if (TI >= NT);
+                object T (lget [my Tokens] TI);
+                break if ([T.Start_Position] > [C.Start_Position]);
+                increment TI;
+            }
+            flag Trailing [false];
+            if (TI > 0)
+            {
+                object P (lget [my Tokens] (TI - 1));
+                flag Fresh_Line [false];
+                if ((P is a Py_Newline) or (P is a Py_Indent) or (P is a Py_Dedent))
+                {
+                    comment `a newline or indentation token before the comment
+                    means the comment starts its own line: leading`;
+                    Fresh_Line = [true];
+                }
+                if (not Fresh_Line)
+                {
+                    integer Gap_Start ([P.End_Position] + 1);
+                    integer Gap_Len (([C.Start_Position] - [P.End_Position]) - 1);
+                    if (Gap_Len < 0)
+                    {
+                        Gap_Len = 0;
+                    }
+                    string Between (substring [my Text] Gap_Start Gap_Len);
+                    if (not (Between contains [line]))
+                    {
+                        Trailing = [true];
+                    }
+                }
+            }
+            if [C.In_Parens]
+            {
+                comment `a comment inside brackets would be joined into the
+                middle of a logical line, so it floats up to lead the
+                statement: walk back to the first significant token of the
+                current logical line and attach there. each hoisted comment
+                keeps its own line, preserving multiplicity and order.`;
+                integer K (TI - 1);
+                integer LS -1;
+                forever
+                {
+                    break if (K < 0);
+                    object TB (lget [my Tokens] K);
+                    break if ((TB is a Py_Newline) or (TB is a Py_Indent) or (TB is a Py_Dedent));
+                    LS = K;
+                    K = (K - 1);
+                }
+                if (LS >= 0)
+                {
+                    object LT (lget [my Tokens] LS);
+                    push [LT.Normpy_Leads] Text;
+                    continue;
+                }
+                Trailing = [false];
+            }
+            integer J TI;
+            object Target [null];
+            if Trailing
+            {
+                forever
+                {
+                    break if (J >= NT);
+                    object T2 (lget [my Tokens] J);
+                    if (T2 is a Py_Newline)
+                    {
+                        Target = T2;
+                        break;
+                    }
+                    increment J;
+                }
+                if (Target is null)
+                {
+                    Target = (llast [my Tokens]);
+                }
+                push [Target.Normpy_Trails] Text;
+            }
+            else
+            {
+                forever
+                {
+                    break if (J >= NT);
+                    object T2 (lget [my Tokens] J);
+                    if ((T2 is a Py_Indent) or (T2 is a Py_Dedent))
+                    {
+                        increment J;
+                        continue;
+                    }
+                    Target = T2;
+                    break;
+                }
+                if (Target is null)
+                {
+                    Target = (llast [my Tokens]);
+                }
+                push [Target.Normpy_Leads] Text;
+            }
+        }
+    }
+
+    method number Regenerate
+    {
+        return 0 if ((i Parse_Python) = 0);
+        object Root (llast [my Elements]);
+        i Set_Parents Root;
+        i Attach_Comments;
+        [my Generator Elements] = [my Elements];
+        flag Status = ([my Generator].Infer_Normpy);
+        return 0 if (not Status);
+        my Normpy = [my Generator Normpy];
+        return 1;
+    }
+}

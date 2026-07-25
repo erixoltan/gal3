@@ -1,0 +1,22 @@
+flowerbox 'gal to mumps main';
+main [string Source_File, string Target_File]
+{
+    verbosity;
+    verbose 'gal mumps compiler';
+    verbose 'input file: ' Source_File;
+    string Report_File Target_File '.elems';
+    object MC = (new Mumps_Compiler);
+    MC.Initialize;
+    MC.File_Name = Source_File;
+    MC.Code = '<undefined>';
+    number Status = (MC.Infer);
+    if (Status = 0)
+    {
+        say 'Error inferring mumps code';
+        write (MC.Element_Report) to Report_File;
+    }
+    else
+    {
+        write [MC.Mumps] to Target_File;
+    }
+}

@@ -1,0 +1,278 @@
+flowerbox 'nsl line oriented parser generator';
+
+parser Nsl_Token
+{
+    tokens
+        Character
+        Char_Number
+        Char_Punct
+        Char_Line
+        Char_Ident
+        ;
+    either Token
+        Token_Tab
+        Token_Line
+        Token_Comma
+        Token_Ws
+        Token_Quote
+        Token_Number
+        Token_Word
+        Token_Punct
+        Character
+        ;
+    sequence Token_Tab
+        [tab]
+        ;
+    sequence Token_Spaces
+        '    ';
+    sequence Token_Number
+        [repeating Char_Number]
+        ;
+    sequence Token_Punct
+        Char_Punct
+        ;
+    sequence Token_Line
+        Char_Line
+        ;
+    sequence Token_Comma
+        ','
+        ;
+    sequence Token_Ws
+        [repeating Ws]
+        ;
+    sequence Token_Word
+        [repeating Char_Ident]
+        ;
+    either Ws
+        ' '
+        Token_Tab
+        ;
+}
+
+
+parser Nsl
+{
+    tokens
+        Token_Word
+        Token_Number
+        Token_Quote
+        Token_Comma
+        Token_Tab
+        Token_Spaces
+        Token_Line
+        ;
+    sequence Program
+        [repeating Line]
+        ;
+    sequence Line
+        [optrep Indent]
+        [optrep Expression]
+        Token_Line
+        ;
+    either Indent
+        Token_Tab
+        '    '
+        ;
+    either Expression
+        Operation
+        Syntax
+        Token_Word
+        Token_Number
+        Token_Quote
+        Token_Comma
+        ;
+    either Statement_End
+        ";"
+        Block
+        ;
+    sequence Block
+        "{"
+        [optrep Statement]
+        "}"
+        ;
+    sequence Operation
+        '('
+        [repeating Expression]
+        ')'
+        ;
+    sequence Syntax
+        '['
+        [repeating Expression]
+        ']'
+        ;
+
+}
+
+
+
+class append Spell
+{
+    method string Nsl_Arguments
+    {
+        string Code '';
+        object Arg;
+        for each Arg in [my Arguments]
+        {
+            append Code ' ' [Arg.Nsl];
+        }
+        return Code;
+    }
+    method string Nsl_Args
+    {
+        string Code '';
+        object Arg;
+        for each Arg in [my Listargs]
+        {
+            append Code ' ' [Arg.Nsl];
+        }
+        return Code;
+    }
+}
+
+class append Block
+{
+    property string Nsl_Lines;
+}
+
+class append Statement
+{
+    method string Nsl_Block
+    {
+        undefined [my Block Nsl]
+        {
+            return '';
+        }
+        return [my Block Nsl];
+    }
+}
+
+generator Nsl
+{
+    generate Program
+    {
+        string Code '';
+        object Stmt;
+        for each Stmt in [my Statements]
+        {
+            undefined [Stmt.Nsl]
+            {
+                Stmt.Infer_Nsl;
+            }
+            Code s+ [Stmt.Nsl] [line];
+        }
+        i = Code;
+    }
+    generate Token
+    {
+        i = [my Text];
+    }
+    generate Statement
+    {
+        string Code
+            (i Nsl_Arguments)
+            (i Nsl_Block);
+        i = Code;
+    }
+    generate Operation
+        '(' (i Nsl_Arguments) ')';
+    generate Syntax
+        '[' (i Nsl_Arguments) ']';
+    generate Block
+    {
+        string Statements '';
+        object Line;
+        for each Line in [my Statements]
+        {
+            append Statements [indent] [Line.Nsl] [line];
+        }
+        string Code;
+        if (Statements s= '')
+        {
+            Code = ';';
+        }
+        else
+        {
+            Code = (append [line] '{' [line] Statements '}');
+        }
+        my Nsl_Lines = Statements;
+        i = Code;
+    }
+
+    generate Statement_Flowerbox
+        'flower box' (i Nsl_Arguments) [line];
+}
+
+class Nsl_Compiler is Compiler
+{
+    property object Token_Parser (new Nsl_Token_Parser);
+    property object Parser (new Nsl_Parser);
+    property object Generator (new Nsl_Generator [self]);
+    property object Dialect (new Dialect_Compiler);
+
+    method string Element_Report
+    {
+        string Text '';
+        object Elem;
+        integer Count 0;
+        for each Elem in [my Elements]
+        {
+            append Text (string Count) '. ' [class name Elem];
+            forgive
+            {
+                append Text ' nsl <' [Elem.Nsl] '>';
+            }
+            forgive
+            {
+                append Text ' error ' [Elem.Error];
+            }
+            append Text [line];
+            increment Count;
+        }
+        return Text;
+    }
+
+    method number Infer_Tokens
+    {
+        comment `nsl still lexes through character elements: the standard
+        pipeline no longer builds them, so make sure they exist here`;
+        return 0 if ((i Infer_Characters) = 0);
+        object Char;
+        object Current = (new Token);
+        object Removed;
+        integer Status;
+        for each Char in [my Characters]
+        {
+            Status = (Current.Append_Character Char);
+            continue if (Status > 0);
+            Current = (Token:Factory Char);
+            push [my Tokens] Current;
+        }
+        return 1;
+    }
+
+    method number Infer_Elements
+    {
+        list Elems;
+        object P = [my Parser];
+        P.Text = [my Text];
+        P.Tokens = [my Tokens];
+        number Status = (P.Parse_Program Elems);
+        return 0 if (not Status);
+        integer Token_Count = (llength [my Tokens]);
+        if (Token_Count < [P.Token_Pos])
+        {
+            debug;
+            return 0;
+        }
+        my Elements = [P.Elements];
+        return Status;
+    }
+
+    method number Infer_Code
+    {
+        [my Generator Elements] = [my Elements];
+        [my Generator].Infer_Nsl;
+        my Nsl = [my Generator Nsl];
+        return 1;
+    }
+}

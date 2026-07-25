@@ -1,0 +1,342 @@
+#!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+
+echo "building gal3 with gal3"
+
+# Activate the shared uv-managed Python environment for the whole toolchain.
+source "$(dirname "$(readlink -f "$0")")/../galenv" || exit 1
+
+BUILD="${GAL_BUILD:-$GAL_HOME/gal3build}"
+mkdir -p "$BUILD"
+BIN="$HOME/.gal3"
+mkdir -p "$BIN"
+cp bin/Runtime.py "$BIN"/
+cp bin/pdebug.py "$BIN"/
+cp bin/zdebug.py "$BIN"/
+
+function append
+{
+#     echo append $1 to $2
+    cat "$BUILD/$1.txt" >> "$BUILD/$2.txt"
+}
+
+function new
+{
+    echo "">"$BUILD/$1.txt"
+}
+
+function gal3
+{
+    # unique temp per output so parallel compiles cannot collide
+    local TF="$2.tmp"
+    echo "        gal3 $1 '-->' $2"
+    rm -f "$TF"
+    python ~/.gal3/gal.py "$1" "$TF" < /dev/null
+    if [ -f "$TF" ]
+    then
+        mv "$TF" "$2"
+        mv "$TF.elems" "$2.elems" 2> /dev/null
+        # echo "gal3 success creating $2"
+    else
+        echo "gal3 failed creating $2"
+        exit 1
+    fi
+}
+
+function fallback3
+{
+    local TF="$2.tmp"
+    echo "        fallback3 $1 '-->' $2"
+    rm -f "$TF"
+    python ~/.gal3/fallback.py "$1" "$TF" < /dev/null
+    if [ -f "$TF" ]
+    then
+        mv "$TF" "$2"
+        mv "$TF.elems" "$2.elems" 2> /dev/null
+        # echo "fallback3 success creating $2"
+    else
+        echo "fallback3 failed creating $2"
+        exit 1
+    fi
+}
+
+function galpy3
+{
+    local TF="$2.tmp"
+    echo "        galpy3 $1 '-->' $2"
+    rm -f "$TF"
+    python ~/.gal3/galpy.py "$1" "$TF" < /dev/null
+    if [ -f "$TF" ]
+    then
+        mv "$TF" "$2"
+        mv "$TF.elems" "$2.elems" 2> /dev/null
+        # echo "galpy3 success creating $2"
+    else
+        echo "galpy3 failed creating $2"
+        exit 1
+    fi
+}
+
+function galjs
+{
+    local TF="$2.tmp"
+    echo "        galjs3 $1 '-->' $2"
+    rm -f "$TF"
+    python ~/.gal3/galjs.py "$1" "$TF" < /dev/null
+    if [ -f "$TF" ]
+    then
+        mv "$TF" "$2"
+        mv "$TF.elems" "$2.elems" 2> /dev/null
+        echo "galjs3 success creating $2"
+    else
+        echo "galjs3 failed creating $2"
+        exit 1
+    fi
+}
+
+function atomic
+{
+    local GALFILE="$BUILD/$1.gal"
+    local FALLBACK="$BUILD/$1.fallback"
+    local ATOMIC="$BUILD/$1.atomic"
+    # local SANDTOMIC="$SANDBOX/$1.atomic"
+    local MAX_ITERATIONS=5  # Limit iterations to prevent infinite loops
+    echo "    atomic $GALFILE -> $FALLBACK -> $ATOMIC"
+    # use gal file as first fallback version.
+    cp "$GALFILE" "$FALLBACK"
+    # Create a working copy for iterations
+    rm -f "$BUILD/$1.fb*" &> /dev/null
+    local COUNTER=0
+    for (( ; $COUNTER<$MAX_ITERATIONS; COUNTER++)); do
+        local TEMP="$BUILD/$1.fb$COUNTER"
+        # gal2 fb "$FALLBACK" "$TEMP"
+        fallback3 "$FALLBACK" "$TEMP"
+        if [ ! -f "$TEMP" ]; then
+            echo "    no file $TEMP!"
+            break
+        fi
+        if cmp -s "$FALLBACK" "$TEMP"; then
+            echo "    files are equal!"
+            break
+        fi
+        FALLBACK="$TEMP"
+    done
+    echo "    copy $FALLBACK to $ATOMIC"
+    cp "$FALLBACK" "$ATOMIC"
+    #cp "$ATOMIC" "$SANDTOMIC"
+}
+
+
+function compile
+{
+    echo "Compiling $1..."
+    echo "module Compiler {">"$BUILD/$1.tx2"
+    cat "$BUILD/$1.txt">>"$BUILD/$1.tx2"
+    echo "}">>"$BUILD/$1.tx2"
+
+    # gal2 gs "$BUILD/$1.txt" "$BUILD/$1.gal"
+    gal3 "$BUILD/$1.tx2" "$BUILD/$1.gal"
+
+    echo "Starting atomic conversion for $1..."
+    atomic "$1"
+    if [ ! -f "$BUILD/$1.atomic" ]; then
+        echo "ERROR: Atomic conversion failed for $1"
+        return 1
+    fi
+
+     echo "Generating Python output for $1..."
+#    gal2 py "$BUILD/$1.atomic" "$BUILD/$1.py"
+    galpy3 "$BUILD/$1.atomic" "$BUILD/$1.py"
+    echo "Copying $1.py to $BIN"
+    cp "$BUILD/$1.py" "$BIN/$1.py"
+
+    # echo "Generating JavaScript output for $1..."
+    ## gal2 js "$BUILD/$1.atomic" "$BUILD/$1.js"
+    #galjs "$BUILD/$1.atomic" "$BUILD/$1.js"
+    #cp "$BUILD/$1.js" "$BIN/$1.js"
+
+#     echo "Compilation of $1 completed successfully"
+}
+
+# All artifact compiles are independent of each other: run them concurrently.
+JOB_PIDS=()
+JOB_NAMES=()
+
+function compile_bg
+{
+    compile "$1" > "$BUILD/$1.buildlog" 2>&1 &
+    JOB_PIDS+=($!)
+    JOB_NAMES+=("$1")
+    echo "Compiling $1 (parallel, log: $BUILD/$1.buildlog)..."
+}
+
+function wait_jobs
+{
+    local FAIL=0
+    local i
+    for i in "${!JOB_PIDS[@]}"; do
+        local NAME="${JOB_NAMES[$i]}"
+        if ! wait "${JOB_PIDS[$i]}" || [ ! -f "$BIN/$NAME.py" ]; then
+            echo "ERROR: compile of $NAME failed. Log tail:"
+            tail -30 "$BUILD/$NAME.buildlog"
+            FAIL=1
+        else
+            echo "    $NAME ok"
+        fi
+    done
+    JOB_PIDS=()
+    JOB_NAMES=()
+    if [ $FAIL = 1 ]; then
+        echo "selfbuild failed"
+        exit 1
+    fi
+}
+
+cp *.txt $BUILD/
+cp bin/Runtime.py ~/.gal3/
+
+new zero
+append compiler_base zero
+append compiler_dialect zero
+append attributes_inference zero
+append structure_inference zero
+append data_type_inference zero
+append inheritance_inference zero
+append llm_inference zero
+
+#new compiler
+#append zero compiler
+#append compiler_main compiler
+#compile compiler
+
+new gal_3
+append zero gal_3
+append gal_base gal_3
+append gal_main gal_3
+compile_bg gal_3
+
+new fallback_3
+append zero fallback_3
+append gal_base fallback_3
+append fallback_inference fallback_3
+append llm_inference fallback_3
+append fallback_main fallback_3
+compile_bg fallback_3
+
+new galpy_3
+append zero galpy_3
+append gal_base galpy_3
+append fallback_inference galpy_3
+append python_inference galpy_3
+append llm_inference galpy_3
+append python_main galpy_3
+compile_bg galpy_3
+
+new galc_3
+append zero galc_3
+append gal_base galc_3
+append fallback_inference galc_3
+append c_inference galc_3
+append llm_inference galc_3
+append c_main galc_3
+compile_bg galc_3
+
+new galmumps_3
+append zero galmumps_3
+append gal_base galmumps_3
+append fallback_inference galmumps_3
+append mumps_inference galmumps_3
+append llm_inference galmumps_3
+append mumps_main galmumps_3
+compile_bg galmumps_3
+
+new galjs_3
+append zero galjs_3
+append gal_base galjs_3
+append fallback_inference galjs_3
+append javascript_inference galjs_3
+append llm_inference galjs_3
+append javascript_main galjs_3
+compile_bg galjs_3
+
+new galgo_3
+append zero galgo_3
+append gal_base galgo_3
+append fallback_inference galgo_3
+append go_inference galgo_3
+append llm_inference galgo_3
+append go_main galgo_3
+compile_bg galgo_3
+
+new galjava_3
+append zero galjava_3
+append gal_base galjava_3
+append fallback_inference galjava_3
+append java_inference galjava_3
+append llm_inference galjava_3
+append java_main galjava_3
+compile_bg galjava_3
+
+new galcpp_3
+append zero galcpp_3
+append gal_base galcpp_3
+append fallback_inference galcpp_3
+append cpp_inference galcpp_3
+append llm_inference galcpp_3
+append cpp_main galcpp_3
+compile_bg galcpp_3
+
+new peg_3
+append zero peg_3
+append peg_base peg_3
+append peg_gen peg_3
+append peg_main peg_3
+compile_bg peg_3
+
+new pylex_3
+append zero pylex_3
+append py_base pylex_3
+append py_main pylex_3
+compile_bg pylex_3
+
+new pyparse_3
+append zero pyparse_3
+append py_base pyparse_3
+append pyparse_base pyparse_3
+append python_parser pyparse_3
+append pyparse_main pyparse_3
+compile_bg pyparse_3
+
+new pygen_3
+append zero pygen_3
+append py_base pygen_3
+append pyparse_base pygen_3
+append python_parser pygen_3
+append pygen_base pygen_3
+append pygen_main pygen_3
+compile_bg pygen_3
+
+new pygal_3
+append zero pygal_3
+append py_base pygal_3
+append pyparse_base pygal_3
+append python_parser pygal_3
+append pygal_base pygal_3
+append pygal_main pygal_3
+compile_bg pygal_3
+
+wait_jobs
+
+# new nsl_3
+# append zero nsl_3
+# append nsl_base nsl_3
+# append nsl_main nsl_3
+# compile nsl_3
+
+# ls -1 "$BIN"/*.py
+# ls -1 "$BIN"/*.js
+
+echo "gal3 compiler build complete"
+
+# diff -w -B -d "$BUILD/gal.txt" "$BUILD/gal.gal"
+# gedit "$BUILD/gal.txt" "$BUILD/gal.gal" &

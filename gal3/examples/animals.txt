@@ -1,0 +1,69 @@
+flowerbox 'super_test: milestone-2 constructor semantics — no Base required, explicit super, pass-nothing default';
+
+class Animal
+{
+    property string Name '';
+    property string Sound 'silence';
+    constructor [string Name, variant Sound [null]]
+    {
+        my Name = Name;
+        if (defined Sound)
+        {
+            my Sound = Sound;
+        }
+    }
+    method void Speak
+    {
+        say [my Name] " says " [my Sound];
+    }
+}
+
+class Dog is Animal
+{
+    constructor [string Name]
+    {
+        super Name 'woof';
+    }
+}
+
+class Cat is Animal
+{
+    property integer Lives 9;
+    constructor [string Name]
+    {
+        super Name;
+        my Sound = 'meow';
+    }
+}
+
+class Rock
+{
+    constructor
+    {
+        say "a rock forms";
+    }
+    method void Speak
+    {
+        say "the rock is silent";
+    }
+}
+
+class Pebble is Rock
+{
+    property integer Grams 5;
+}
+
+module Super_Test
+{
+    main
+    {
+        object D = (new Dog 'Rex');
+        D.Speak;
+        object C = (new Cat 'Whiskers');
+        C.Speak;
+        say "cat lives: " [C.Lives];
+        object P = (new Pebble);
+        P.Speak;
+        say "pebble grams: " [P.Grams];
+    }
+}

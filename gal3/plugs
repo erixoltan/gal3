@@ -1,0 +1,326 @@
+#!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+
+echo "building gal3 and plugins with gal33"
+
+# Activate the shared uv-managed Python environment for the whole toolchain.
+source "$(dirname "$(readlink -f "$0")")/../galenv" || exit 1
+
+BUILD="${GAL_BUILD:-$GAL_HOME/gal3build}"
+mkdir -p "$BUILD"
+BIN="$HOME/.gal3"
+mkdir -p "$BIN"
+cp bin/Runtime.py "$BIN"/
+cp bin/pdebug.py "$BIN"/
+cp bin/zdebug.py "$BIN"/
+
+function append
+{
+#     echo append $1 to $2
+    cat "$BUILD/$1.txt" >> "$BUILD/$2.txt"
+}
+
+function add_include
+{
+    echo ''>>"$BUILD/$1.txt"
+    echo 'comment "BEGIN include gal_compiler_plugins.txt";'>>"$BUILD/$1.txt"
+    echo ''>>"$BUILD/$1.txt"
+    echo 'include "gal_compiler_plugins";'>>"$BUILD/$1.txt"
+    echo ''>>"$BUILD/$1.txt"
+    echo 'comment "END include gal_compiler_plugins.txt";'>>"$BUILD/$1.txt"
+    echo ''>>"$BUILD/$1.txt"
+}
+
+function new
+{
+    echo "">"$BUILD/$1.txt"
+}
+
+function gal3
+{
+    TF=/tmp/out.gal
+    echo "        gal3 $1 '-->' $2"
+    python ~/.gal3/gal_33.py "$1" "$TF"
+    if [ -f "$TF" ]
+    then
+        mv "$TF" "$2"
+        mv "$TF.elems" "$2.elems" 2> /dev/null
+        # echo "gal3 success creating $2"
+    else
+        echo "gal3 failed creating $2"
+        exit 1
+    fi
+}
+
+function fallback3
+{
+    TF=/tmp/out.fb
+    echo "        fallback3 $1 '-->' $2"
+    python ~/.gal3/fallback_33.py "$1" "$TF"
+    if [ -f "$TF" ]
+    then
+        mv "$TF" "$2"
+        mv "$TF.elems" "$2.elems" 2> /dev/null
+        # echo "fallback3 success creating $2"
+    else
+        echo "fallback3 failed creating $2"
+        exit 1
+    fi
+}
+
+function galpy3
+{
+    TF=/tmp/out.py
+    echo "        galpy3 $1 '-->' $2"
+    python ~/.gal3/galpy_33.py "$1" "$TF"
+    if [ -f "$TF" ]
+    then
+        mv "$TF" "$2"
+        mv "$TF.elems" "$2.elems" 2> /dev/null
+        # echo "galpy3 success creating $2"
+    else
+        echo "galpy3 failed creating $2"
+        exit 1
+    fi
+}
+
+function galjs
+{
+    TF=/tmp/out.js
+    echo "        galjs3 $1 '-->' $2"
+    python ~/.gal3/galjs_33.py "$1" "$TF"
+    if [ -f "$TF" ]
+    then
+        mv "$TF" "$2"
+        mv "$TF.elems" "$2.elems" 2> /dev/null
+        echo "galjs3 success creating $2"
+    else
+        echo "galjs3 failed creating $2"
+        exit 1
+    fi
+}
+
+function atomic
+{
+    local GALFILE="$BUILD/$1.gal"
+    local FALLBACK="$BUILD/$1.fallback"
+    local ATOMIC="$BUILD/$1.atomic"
+    # local SANDTOMIC="$SANDBOX/$1.atomic"
+    local MAX_ITERATIONS=5  # Limit iterations to prevent infinite loops
+    echo "    atomic $GALFILE -> $FALLBACK -> $ATOMIC"
+    # use gal file as first fallback version.
+    cp "$GALFILE" "$FALLBACK"
+    # Create a working copy for iterations
+    rm -f "$BUILD/$1.fb*" &> /dev/null
+    local COUNTER=0
+    for (( ; $COUNTER<$MAX_ITERATIONS; COUNTER++)); do
+        local TEMP="$BUILD/$1.fb$COUNTER"
+        fallback3 "$FALLBACK" "$TEMP"
+        if [ ! -f "$TEMP" ]; then
+            echo "    no file $TEMP!"
+            break
+        fi
+        if cmp -s "$FALLBACK" "$TEMP"; then
+            echo "    files are equal!"
+            break
+        fi
+        FALLBACK="$TEMP"
+    done
+    echo "    copy $FALLBACK to $ATOMIC"
+    cp "$FALLBACK" "$ATOMIC"
+    #cp "$ATOMIC" "$SANDTOMIC"
+}
+
+
+function compile
+{
+    echo "Compiling $1..."
+    echo "module Compiler {">"$BUILD/$1.tx2"
+    cat "$BUILD/$1.txt">>"$BUILD/$1.tx2"
+    echo "}">>"$BUILD/$1.tx2"
+
+    gal3 "$BUILD/$1.tx2" "$BUILD/$1.gal"
+    
+    echo "Starting atomic conversion for $1..."
+    atomic "$1"
+    if [ ! -f "$BUILD/$1.atomic" ]; then
+        echo "ERROR: Atomic conversion failed for $1"
+        return 1
+    fi
+    
+     echo "Generating Python output for $1..."
+    galpy3 "$BUILD/$1.atomic" "$BUILD/$1.py"
+    cp "$BUILD/$1.py" "$BIN/$1.py"
+    
+    # echo "Generating JavaScript output for $1..."
+    #galjs "$BUILD/$1.atomic" "$BUILD/$1.js"
+    #cp "$BUILD/$1.js" "$BIN/$1.js"
+    
+#     echo "Compilation of $1 completed successfully"
+}
+
+cp *.txt $BUILD/
+cp bin/Runtime.py ~/.gal3/
+
+new zero
+append compiler_base zero
+append compiler_dialect zero
+append attributes_inference zero
+append structure_inference zero
+append data_type_inference zero
+append llm_inference zero
+
+#new compiler
+#append zero compiler
+#append compiler_main compiler
+#compile compiler
+
+# compile the plugin sources to their include-free .gal forms before
+# anything includes them. plugins are bare statement lists (no module
+# wrapper): they are spliced INTO module Compiler by the include statement.
+# resolving their own includes here is what makes nested includes terminate.
+# the Documentation dialect lives in the generalabstractlanguage.com repo;
+# it must be compiled before the manifest that includes it.
+SITE="$HOME/code/generalabstractlanguage.com"
+if [ -f "$SITE/src/Documentation.txt" ]; then
+    gal3 "$SITE/src/Documentation.txt" Documentation.gal
+fi
+if [ -f gal_compiler_plugins.txt ]; then
+    gal3 gal_compiler_plugins.txt gal_compiler_plugins.gal
+fi
+if [ -f "$SITE/src/documentation_main.txt" ]; then
+    cp "$SITE/src/documentation_main.txt" "$BUILD/documentation_main.txt"
+fi
+
+new gal_plug
+append zero gal_plug
+append gal_base gal_plug
+add_include gal_plug
+append gal_main gal_plug
+compile gal_plug
+
+# the galdoc tool: parses an article in the Documentation dialect, runs its
+# demo session, and emits markdown + video script. the dialect arrives via
+# the plugin include; documentation_main selects Dialect_Documentation.
+new galdoc_plug
+append zero galdoc_plug
+append gal_base galdoc_plug
+add_include galdoc_plug
+append documentation_main galdoc_plug
+compile galdoc_plug
+
+new fallback_plug
+append zero fallback_plug
+append gal_base fallback_plug
+append fallback_inference fallback_plug
+append llm_inference fallback_plug
+append fallback_main fallback_plug
+compile fallback_plug
+
+new galpy_plug
+append zero galpy_plug
+append gal_base galpy_plug
+append fallback_inference galpy_plug
+append python_inference galpy_plug
+append llm_inference galpy_plug
+append python_main galpy_plug
+compile galpy_plug
+
+new galc_plug
+append zero galc_plug
+append gal_base galc_plug
+append fallback_inference galc_plug
+append c_inference galc_plug
+append llm_inference galc_plug
+append c_main galc_plug
+compile galc_plug
+
+new galjs_plug
+append zero galjs_plug
+append gal_base galjs_plug
+append fallback_inference galjs_plug
+append javascript_inference galjs_plug
+append llm_inference galjs_plug
+append javascript_main galjs_plug
+compile galjs_plug
+
+new galgo_plug
+append zero galgo_plug
+append gal_base galgo_plug
+append fallback_inference galgo_plug
+append go_inference galgo_plug
+append llm_inference galgo_plug
+append go_main galgo_plug
+compile galgo_plug
+
+new galjava_plug
+append zero galjava_plug
+append gal_base galjava_plug
+append fallback_inference galjava_plug
+append java_inference galjava_plug
+append llm_inference galjava_plug
+append java_main galjava_plug
+compile galjava_plug
+
+new galcpp_plug
+append zero galcpp_plug
+append gal_base galcpp_plug
+append fallback_inference galcpp_plug
+append cpp_inference galcpp_plug
+append llm_inference galcpp_plug
+append cpp_main galcpp_plug
+compile galcpp_plug
+
+new peg_plug
+append zero peg_plug
+append peg_base peg_plug
+append peg_gen peg_plug
+append peg_main peg_plug
+compile peg_plug
+
+new pylex_plug
+append zero pylex_plug
+append py_base pylex_plug
+append py_main pylex_plug
+compile pylex_plug
+
+new pyparse_plug
+append zero pyparse_plug
+append py_base pyparse_plug
+append pyparse_base pyparse_plug
+append python_parser pyparse_plug
+append pyparse_main pyparse_plug
+compile pyparse_plug
+
+new pygen_plug
+append zero pygen_plug
+append py_base pygen_plug
+append pyparse_base pygen_plug
+append python_parser pygen_plug
+append pygen_base pygen_plug
+append pygen_main pygen_plug
+compile pygen_plug
+
+new pygal_plug
+append zero pygal_plug
+append py_base pygal_plug
+append pyparse_base pygal_plug
+append python_parser pygal_plug
+append pygal_base pygal_plug
+append pygal_main pygal_plug
+compile pygal_plug
+
+# new nsl_plug
+# append zero nsl_plug
+# append nsl_base nsl_plug
+# append nsl_main nsl_plug
+# compile nsl_plug
+
+# ls -1 "$BIN"/*.py
+# ls -1 "$BIN"/*.js
+
+echo "gal3 compiler build complete"
+
+# diff -w -B -d "$BUILD/gal.txt" "$BUILD/gal.gal"
+# gedit "$BUILD/gal.txt" "$BUILD/gal.gal" &
+

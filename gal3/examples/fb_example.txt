@@ -1,0 +1,16 @@
+statement Foo 'foo' Scoped
+{
+    argument One 'integer' 'value';
+    argument Two 'string' 'value';
+}
+operation Bar 'bar' Binary
+{
+    argument Three 'class' 'class';
+    optional Four 'string' 'value';
+}
+
+generator Example
+{
+    generate Statement_Foo 'foo ' One ' ' Two (i Fallback_Block);
+    generate Operation_Bar '(bar ' Three ' ' Four ')';
+}

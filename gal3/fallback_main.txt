@@ -1,0 +1,28 @@
+flowerbox 'gal to fallback main';
+main [string Source_File, string Target_File]
+{
+    verbosity;
+    verbose 'fallback3 compiler';
+    verbose 'input file: ' Source_File;
+    string Report_File Target_File '.elems';
+    object FC = (new Fallback_Compiler);
+    FC.Initialize;
+    FC.File_Name = Source_File;
+    FC.Code = '<undefined>';
+    number Result = (FC.Infer);
+    string Unclassified ([FC.Dialect].Print_Unclassified_Verbs);
+    if (Unclassified sgt '')
+    {
+        say Unclassified;
+    }
+    if (Result > 0)
+    {
+        write [FC.Fallback] to Target_File;
+    }
+    else
+    {
+        write (FC.Element_Report) to Report_File;
+        verbose 'wrote ' Report_File;
+        say "Fallback Error, output not written";
+    }
+}

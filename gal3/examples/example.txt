@@ -1,0 +1,7 @@
+module Hello
+{
+    main
+    {
+        say "Hello, World!";
+    }
+}

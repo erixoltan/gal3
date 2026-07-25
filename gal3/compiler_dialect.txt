@@ -1,0 +1,1452 @@
+flower box 'the compiler dialect, language elements necessary for the compiler to run.';
+
+statement Flowerbox 'flower box';
+
+statement Colon ':' Line
+{
+    argument Class_Name 'class' 'class';
+    argument Method_Name 'method' 'method';
+}
+
+statement Argument 'argument' Argument
+{
+    argument Argument_Name  'property' 'variable';
+    argument Data_Type      'type' 'string';
+    argument Usage 'usage'  'string';
+}
+
+statement Optional 'optional' Argument
+{
+    argument Argument_Name  'property' 'variable';
+    argument Data_Type      'type' 'string';
+    argument Usage 'usage'  'string';
+}
+
+statement Statement 'statement' Class_Generator
+{
+    argument Class_Name     'class' 'class';
+    argument Verb_String    'string' 'string';
+    optional Parent_Class   'class' 'class';
+    property string Base_Class 'Statement';
+}
+
+statement Operation 'operation' Class_Generator
+{
+    argument Class_Name     'class' 'class';
+    argument Verb_String    'string' 'string';
+    optional Parent_Class   'class' 'class';
+    property string Base_Class 'Operation';
+}
+
+statement Syntax 'syntax' Class_Generator
+{
+    argument Class_Name     'class' 'class';
+    argument Verb_String    'string' 'string';
+    optional Parent_Class   'class' 'class';
+    property string Base_Class 'Syntax';
+}
+
+statement Class 'class' Class
+{
+    class property dictionary Names;
+    argument Class_Name 'class' 'class';
+    optional Ancestor 'class' 'class';
+}
+
+statement Class_Set 'class set' Class_Append
+{
+    argument Class_Name 'class' 'class';
+}
+
+statement Class_Method 'class method' Method
+{
+    argument Data_Type 'type' 'string';
+    argument Name 'method' 'method';
+}
+
+statement Keyword 'keyword' Argument
+{
+    argument Argument_Name  'property' 'variable';
+    argument Data_Type      'type' 'string';
+    argument Usage 'usage'  'string';
+}
+
+statement Method 'method' Method
+{
+    keyword Data_Type 'type' 'string';
+    argument Name 'method' 'method';
+}
+
+statement Property 'property' Property 
+{
+    keyword Type 'type' 'string';
+    argument Name 'property' 'variable';
+    optional Value 'value' 'variant';
+}
+
+statement Class_Property 'class property' Property
+{
+    keyword Type 'type' 'string';
+    argument Name 'property' 'variable';
+    optional Value 'value' 'variant';
+}
+
+statement Flag 'flag' Declaration
+{
+    argument Name 'variable' 'variable';
+    optional Value 'flag' 'value';
+}
+
+statement Integer 'integer' Declaration
+{
+    argument Name 'variable' 'variable';
+    optional Value 'integer' 'value';
+}
+
+statement Number 'number' Declaration
+{
+    argument Name 'variable' 'variable';
+    optional Value 'number' 'value';
+}
+
+statement String 'string' Declaration
+{
+    argument Name 'variable' 'variable';
+}
+
+statement I_Equal 'i =' Line
+{
+    argument Value 'string' 'value';
+}
+
+statement Object 'object' Declaration
+{
+    argument Name 'variable' 'variable';
+    optional Value 'object' 'value';
+}
+
+statement Dictionary 'dict' Declaration
+{
+    argument Name 'variable' 'variable';
+}
+
+statement List 'list' Declaration
+{
+    argument Name 'variable' 'variable';
+}
+statement Global_List 'global list' Declaration
+{
+    argument Name 'variable' 'variable';
+}
+
+statement Variant 'variant' Declaration
+{
+    argument Name 'variable' 'variable';
+    optional Value 'variant' 'value';
+}
+
+statement Module 'module' Module
+{
+    argument Name 'variable' 'variable';
+}
+
+statement If 'if' If
+{
+    argument Condition 'flag' 'value';
+}
+
+statement Else_If 'else if' Else_If
+{
+    argument Condition 'flag' 'value';
+}
+
+statement Else 'else' Else
+{
+}
+
+statement Forever 'forever' For;
+
+statement Try 'try' Try
+{
+}
+
+statement Catch 'catch' Catch
+{
+    optional Error 'variable' 'variable';
+}
+
+statement For_Range 'for range' For
+{
+    argument Variable 'number' 'variable';
+    argument Start 'number' 'number';
+    argument End 'number' 'number';
+    optional Increment 'number' 'number';
+    method void Register_Variables
+    {
+        comment `the loop variable of a counted range is definitionally an
+        integer: references inside the loop body then resolve their type,
+        which the strongly typed targets need to format it`;
+        forgive
+        {
+            object Ctx (i Get_Variable_Context);
+            return if (Ctx is null);
+            object N [my Variable];
+            [Ctx.Variables] (N.Get_Input) d= 'integer';
+        }
+    }
+}
+
+statement For_Each_In 'for each in' For
+{
+    argument Item 'variant' 'variable';
+    argument List 'list' 'list';
+}
+
+statement For_Each 'foreach' For
+{
+    argument List 'list' 'list';
+    argument Item 'variant' 'variable';
+}
+
+statement Iterate 'iterate' Iteration
+{
+    argument Dictionary     'dict' 'dict';
+    argument Key_Variable   'variable' 'variable';
+    argument Value_Variable 'variable' 'variable';
+}
+
+statement Return 'return' Line
+{
+    optional Value 'flag' 'value';
+}
+
+statement Inference 'inference' Sideways_Class
+{
+    argument Name 'variable' 'variable';
+}
+
+statement Handle 'handle' Sideways_Method
+{
+    argument Name 'class' 'class';
+}
+
+statement Defined 'defined' Conditional
+{
+    argument Expression 'variable' 'variable';
+}
+
+statement Undefined 'undefined' Conditional
+{
+    argument Expression 'variable' 'variable';
+}
+
+statement Dialect 'dialect' Derived_Class
+{
+    argument Name 'class' 'class';
+    optional Ancestor 'class' 'class';
+}
+
+statement Parser 'parser' Derived_Class
+{
+    argument Name 'class' 'class';
+}
+
+statement Append 'append' Append_Args
+{
+    argument Variable 'variable' 'variable';
+}
+
+statement Push 'push' Line
+{
+    argument List 'list' 'variable';
+}
+
+operation Not_Equal '!=' Binary
+{
+    argument Op1 'variant' 'value';
+    argument Op2 'variant' 'value';
+    property integer Python_Precedence 11;
+    property integer Javascript_Precedence 11;
+    property string Data_Type 'flag';
+}
+
+operation Add '+' Binary
+{
+    argument Op1 'variant' 'value';
+    argument Op2 'variant' 'value';
+    property integer Python_Precedence 6;
+    property integer Javascript_Precedence 6;
+    property string Data_Type 'number';
+}
+
+operation And 'and' Binary
+{
+    argument Op1 'flag' 'value';
+    argument Op2 'flag' 'value';
+    property integer Python_Precedence 13;
+    property integer Javascript_Precedence 13;
+    property string Data_Type 'flag';
+}
+
+operation Call '.'
+{
+    argument Object 'object' 'value';
+    argument Method 'method' 'variable';
+    property integer Python_Precedence 2;
+    property integer Javascript_Precedence 2;
+}
+
+operation Colon ':'
+{
+    argument Class 'class' 'class';
+    argument Method 'method' 'method';
+    property integer Python_Precedence 2;
+    property integer Javascript_Precedence 2;
+}
+
+operation Append 'append' Append_Args
+{
+    argument Variable 'variable' 'variable';
+    property integer Python_Precedence 6;
+    property integer Javascript_Precedence 6;
+    property string Data_Type 'string';
+}
+
+operation Contains 'contains' Binary
+{
+    argument String 'string' 'value';
+    argument Search 'string' 'value';
+    property integer Python_Precedence 11;
+    property integer Javascript_Precedence 11;
+    property string Data_Type 'flag';
+}
+
+operation Defined 'defined'
+{
+    argument Variable 'variable' 'variable';
+    property integer Python_Precedence 11;
+    property integer Javascript_Precedence 11;
+    property string Data_Type 'flag';
+}
+
+operation Dict_Exists 'dict exists'
+{
+    argument Dictionary 'variable' 'value';
+    argument Key 'string' 'value';
+    property integer Python_Precedence 11;
+    property integer Javascript_Precedence 11;
+    property string Data_Type 'flag';
+}
+
+operation Dict_Get 'dict get'
+{
+    argument Dictionary 'variable' 'value';
+    argument Key 'string' 'value';
+    property integer Python_Precedence 2;
+    property integer Javascript_Precedence 2;
+}
+
+operation Divide '/' Binary
+{
+    argument Op1 'variant' 'value';
+    argument Op2 'variant' 'value';
+    property integer Python_Precedence 5;
+    property integer Javascript_Precedence 5;
+    property string Data_Type 'number';
+}
+operation Modulo 'mod' Binary
+{
+    argument Op1 'variant' 'value';
+    argument Op2 'variant' 'value';
+    property integer Python_Precedence 5;
+    property integer Javascript_Precedence 5;
+    property string Data_Type 'number';
+}
+operation Minus '-' Binary
+{
+    argument Op1 'variant' 'value';
+    optional Op2 'variant' 'value';
+    property integer Python_Precedence 6;
+    property integer Javascript_Precedence 6;
+    property string Data_Type 'number';
+}
+operation Multiply '*' Binary
+{
+    argument Op1 'variant' 'value';
+    argument Op2 'variant' 'value';
+    property integer Python_Precedence 5;
+    property integer Javascript_Precedence 5;
+    property string Data_Type 'number';
+}
+operation Equal '=' Binary
+{
+    argument Op1 'variant' 'value';
+    argument Op2 'variant' 'value';
+    property integer Python_Precedence 11;
+    property integer Javascript_Precedence 11;
+    property string Data_Type 'flag';
+}
+operation File_Exists 'file exists'
+{
+    argument Path 'string' 'value';
+    property string Data_Type 'flag';
+}
+operation Greater '>' Binary
+{
+    argument Op1 'variant' 'value';
+    argument Op2 'variant' 'value';
+    property integer Python_Precedence 11;
+    property integer Javascript_Precedence 11;
+    property string Data_Type 'flag';
+}
+operation Less '<' Binary
+{
+    argument Op1 'variant' 'value';
+    argument Op2 'variant' 'value';
+    property integer Python_Precedence 11;
+    property integer Javascript_Precedence 11;
+    property string Data_Type 'flag';
+}
+operation Greater_Equal '>=' Binary
+{
+    argument Op1 'variant' 'value';
+    argument Op2 'variant' 'value';
+    property integer Python_Precedence 11;
+    property integer Javascript_Precedence 11;
+    property string Data_Type 'flag';
+}
+operation Less_Equal '<=' Binary
+{
+    argument Op1 'variant' 'value';
+    argument Op2 'variant' 'value';
+    property integer Python_Precedence 11;
+    property integer Javascript_Precedence 11;
+    property string Data_Type 'flag';
+}
+operation I 'i'
+{
+    argument Method 'method' 'method';
+}
+operation Is_A 'is a'
+{
+    argument Object 'object' 'value';
+    property string Data_Type 'flag';
+}
+operation Is_Alpha 'is alpha'
+{
+    argument Character 'string' 'value';
+    property string Data_Type 'flag';
+}
+operation Is_Ident 'is ident'
+{
+    argument Character 'string' 'value';
+    property integer Python_Precedence 11;
+    property integer Javascript_Precedence 11;
+    property string Data_Type 'flag';
+}
+operation Is_Lower 'is lowercase'
+{
+    argument First 'string' 'value';
+    property string Data_Type 'flag';
+}
+operation Is_Upper 'is uppercase'
+{
+    argument First 'string' 'value';
+    property string Data_Type 'flag';
+}
+operation Is_Whitespace 'is whitespace'
+{
+    argument Character 'string' 'value';
+    property integer Python_Precedence 11;
+    property integer Javascript_Precedence 11;
+    property string Data_Type 'flag';
+}
+operation Is_Numeric 'is numeric'
+{
+    argument Character 'string' 'value';
+    property string Data_Type 'flag';
+}
+operation Is_Punctuation 'is punctuation'
+{
+    argument Character 'string' 'value';
+    property integer Python_Precedence 11;
+    property integer Javascript_Precedence 11;
+    property string Data_Type 'flag';
+}
+
+operation Is_Null 'is null'
+{
+    argument Op1 'variant' 'value';
+    property integer Python_Precedence 11;
+    property integer Javascript_Precedence 11;
+    property string Data_Type 'flag';
+}
+
+operation Length 'length'
+{
+    argument First 'string' 'value';
+    property integer Python_Precedence 1;
+    property integer Javascript_Precedence 1;
+    property string Data_Type 'integer';
+}
+
+operation List_Get 'lget'
+{
+    argument List 'list' 'value';
+    argument Offset 'integer' 'value';
+    property integer Python_Precedence 1;
+    property integer Javascript_Precedence 1;
+}
+operation List_Last 'llast'
+{
+    argument List 'list' 'value';
+}
+operation List_Length 'llength'
+{
+    argument List 'list' 'value';
+    property string Data_Type 'integer';
+}
+
+operation New 'new'
+{
+    argument Class_Name 'class' 'class';
+    property integer Python_Precedence 2;
+    property integer Javascript_Precedence 2;
+    property string Data_Type 'object';
+}
+operation Not 'not'
+{
+    argument Op1 'flag' 'value';
+    property integer Python_Precedence 12;
+    property integer Javascript_Precedence 3;
+    property string Data_Type 'flag';
+}
+operation Not_Null 'not null'
+{
+    argument Op1 'string' 'value';
+    property integer Python_Precedence 11;
+    property integer Javascript_Precedence 11;
+    property string Data_Type 'flag';
+}
+operation Or 'or'
+{
+    argument Op1 'flag' 'value';
+    argument Op2 'flag' 'value';
+    property integer Python_Precedence 14;
+    property integer Javascript_Precedence 14;
+    property string Data_Type 'flag';
+}
+operation Pop 'pop'
+{
+    argument List 'list' 'value';
+}
+operation Shift 'shift'
+{
+    argument List 'list' 'value';
+}
+operation Split 'split'
+{
+    argument String 'string' 'value';
+    argument Delimiter 'string' 'value';
+    property string Data_Type 'list';
+}
+operation String_Equal 's='
+{
+    argument Op1 'variant' 'value';
+    argument Op2 'variant' 'value';
+    property integer Python_Precedence 11;
+    property integer Javascript_Precedence 11;
+    property string Data_Type 'flag';
+}
+operation String_Greater 's>'
+{
+    argument Op1 'variant' 'value';
+    argument Op2 'variant' 'value';
+    property integer Python_Precedence 11;
+    property integer Javascript_Precedence 11;
+    property string Data_Type 'flag';
+}
+operation String_Greater_Equal 's>='
+{
+    argument Op1 'variant' 'value';
+    argument Op2 'variant' 'value';
+    property integer Python_Precedence 11;
+    property integer Javascript_Precedence 11;
+    property string Data_Type 'flag';
+}
+operation String_Less 's<'
+{
+    argument Op1 'variant' 'value';
+    argument Op2 'variant' 'value';
+    property integer Python_Precedence 11;
+    property integer Javascript_Precedence 11;
+    property string Data_Type 'flag';
+}
+operation String_Less_Equal 's<='
+{
+    argument Op1 'variant' 'value';
+    argument Op2 'variant' 'value';
+    property integer Python_Precedence 11;
+    property integer Javascript_Precedence 11;
+    property string Data_Type 'flag';
+}
+operation String_Not_Equal 's!='
+{
+    argument Op1 'variant' 'value';
+    argument Op2 'variant' 'value';
+    property integer Python_Precedence 11;
+    property integer Javascript_Precedence 11;
+    property string Data_Type 'flag';
+}
+operation Substring 'substring'
+{
+    argument String_Value 'string' 'value';
+    argument Start_Index 'integer' 'value';
+    optional Length 'integer' 'value';
+    property string Data_Type 'string';
+}
+operation Is_Not_A 'is not a'
+{
+    argument Object 'object' 'value';
+    property integer Python_Precedence 11;
+    property integer Javascript_Precedence 11;
+    property string Data_Type 'flag';
+}
+
+syntax Class 'class'
+{
+    argument Object 'object' 'value';
+}
+syntax Class_Name 'class name'
+{
+    optional Object 'object' 'value';
+}
+syntax Colon ':'
+{
+    argument Class_Name 'class' 'class';
+    argument Property_Name 'property' 'property';
+    property integer Python_Precedence 2;
+    property integer Javascript_Precedence 2;
+}
+syntax Dictionary 'dictionary' Argument
+{
+    argument Variable 'dictionary' 'variable';
+    property string Data_Type 'dictionary';
+}
+syntax False 'false' Literal
+{
+    property string Data_Type 'flag';
+}
+syntax Flag 'flag' Argument
+{
+    argument Variable 'flag' 'variable';
+    optional Default_Value 'flag' 'value';
+    property string Data_Type 'flag';
+}
+syntax Indent 'indent' Literal
+{
+    optional Count 'integer' 'value';
+    property string Data_Type 'string';
+}
+syntax Integer 'integer' Argument
+{
+    argument Variable 'integer' 'variable';
+    optional Default_Value 'integer' 'value';
+    property string Data_Type 'integer';
+}
+syntax Line 'line' Literal
+{
+    optional Count 'integer' 'value';
+    property string Data_Type 'string';
+}
+syntax List 'list' Argument
+{
+    argument Variable 'list' 'variable';
+    property string Data_Type 'list';
+}
+syntax My 'my'
+{
+    argument Property 'property' 'property';
+}
+syntax My_Class 'my class';
+syntax Null 'null';
+syntax Number 'number' Argument
+{
+    argument Variable 'number' 'value';
+    optional Default_Value 'number' 'value';
+    property string Data_Type 'number';
+}
+syntax Object 'object' Argument
+{
+    argument Variable 'object' 'value';
+    optional Default_Value 'object' 'value';
+    property string Data_Type 'object';
+}
+
+syntax Our 'our'
+{
+    optional Class_Property 'property' 'property';
+}
+syntax Property '.'
+{
+    argument Object 'object' 'value';
+    argument Property_Name 'property' 'property';
+    property integer Python_Precedence 2;
+    property integer Javascript_Precedence 2;
+}
+syntax Return 'return' Literal
+{
+    optional Count 'integer' 'value';
+    property string Data_Type 'string';
+}
+syntax Self 'self';
+syntax String 'string' Argument
+{
+    argument Variable 'string' 'value';
+    optional Default_Value 'string' 'value';
+    property string Data_Type 'string';
+}
+syntax Tab 'tab' Literal
+{
+    optional Count 'integer' 'value';
+    property string Data_Type 'string';
+}
+syntax True 'true'
+{
+    property string Data_Type 'flag';
+}
+syntax Us 'us';
+syntax Variant 'variant' Argument
+{
+    argument Variable 'variant' 'value';
+    optional Default_Value 'variant' 'value';
+    property string Data_Type 'variant';
+}
+
+statement Say 'say' Append_Args
+{
+}
+
+statement Readline 'readline' Append_Args
+{
+}
+
+statement Main 'main' Method
+{
+}
+
+statement Verbosity 'verbosity' Line
+{
+    optional Condition 'flag' 'flag';
+}
+
+statement Verbose 'verbose' Append_Args
+{
+}
+
+statement Call '.' Line
+{
+    argument Object 'object' 'object';
+    argument Method 'method' 'method';
+}
+
+statement Propset '. =' Line
+{
+    argument Object 'object' 'value';
+    argument Property 'property' 'variable';
+    argument Value 'variant' 'value';
+}
+
+statement Write_To 'write to' Line
+{
+    argument Text 'string' 'value';
+    argument File 'string' 'value';
+}
+
+statement List_Split 'list split' Line
+{
+    argument Variable 'list' 'variable';
+    argument String 'string' 'value';
+    argument Delimiter 'string' 'value';
+}
+
+statement List_Copy 'list copy' Line
+{
+    argument Target 'list' 'variable';
+    argument Source 'list' 'value';
+}
+
+statement I 'i' Line
+{
+    argument Method 'method' 'method';
+}
+
+statement Constructor 'constructor' Scoped
+{
+}
+
+statement Super 'super' Line;
+
+statement Forgive 'forgive' Scoped
+{
+}
+
+statement Return_If 'return if' Line
+{
+    argument Value 'variant' 'value';
+    optional Condition 'flag' 'value';
+}
+
+statement If_Return 'if return' Line
+{
+    argument Condition 'flag' 'value';
+    optional Value 'variant' 'value';
+}
+
+statement Assign '=' Scoped
+{
+    argument Destination 'variable' 'variable';
+    argument Value 'variant' 'value';
+}
+
+statement Todo 'todo' Comment
+{
+}
+
+statement My_Equal 'my =' Line
+{
+    argument Property_Name 'property' 'variable';
+    argument Value 'variant' 'value';
+}
+
+statement Add '+=' Line
+{
+    argument Destination 'number' 'value';
+    argument Increment 'number' 'value';
+}
+
+statement Continue 'continue' Line
+{
+}
+
+statement Continue_If 'continue if' Line
+{
+    argument Condition 'flag' 'value';
+}
+
+statement Debug 'debug' Line;
+statement Debug_If 'debug if' Line
+{
+    argument Condition 'flag' 'value';
+}
+
+statement Decrement '--' Line
+{
+    argument Destination 'integer' 'variable';
+}
+
+statement Increment '++' Line
+{
+    argument Destination 'integer' 'variable';
+}
+
+statement Error 'error' Line;
+
+statement Comment '#' Comment;
+
+statement File_Read 'fread' Line
+{
+    argument Variable 'string' 'variable';
+    argument File_Name 'string' 'value';
+}
+
+statement Include 'include' Line
+{
+    comment `splice the contents of a compiled plugin file into the source
+    in place of this statement. the argument is a bare plugin name; the
+    '.gal' suffix is imposed. an included file is the output of a previous
+    gal-stage compilation, whose own include statements were resolved when
+    it was built, so includes can never recurse. resolution happens in the
+    gal stage only (see the Gal generator); a .gal file must never contain
+    an include statement.`;
+    argument Name 'string' 'value';
+}
+
+statement Shell_Capture 'shell capture' Line
+{
+    comment `run a shell command and capture the result into a dictionary
+    with stdout, stderr and exit_code keys. the command runs through a real
+    shell, so pipes, redirection and quoting work.`;
+    argument Variable 'dictionary' 'variable';
+    argument Command 'string' 'value';
+}
+
+statement Dictionary_Assign 'd=' Line
+{
+    argument Dict 'ditionary' 'value';
+    argument Subscript 'variant' 'value';
+    argument Value 'variant' 'value';
+}
+
+syntax Is 'is'
+{
+    argument Class_Name 'class' 'class';
+}
+
+statement Join 'join' Line
+{
+    argument Variable 'string' 'variable';
+    argument List 'list' 'value';
+    argument Delimiter 'string' 'value';
+}
+
+statement Either 'either' Line
+{
+    argument Rule_Name 'method' 'method';
+}
+statement English 'english' Comment;
+statement Entity 'entity' Line;
+statement Flags 'flags' Declarations;
+statement Integers 'integers' Declarations;
+statement Numbers 'numbers' Declarations;
+statement Strings 'strings' Declarations;
+statement Lists 'lists' Declarations;
+statement Dictionaries 'dictionaries' Declarations;
+statement Objects 'objects' Declarations;
+statement Variants 'variants' Declarations;
+
+statement Generate 'generate' Sideways_Method
+{
+    argument Class_Name 'class' 'class';
+}
+
+statement Generator 'generator' Scoped
+{
+    argument Language 'class' 'class';
+    optional Ancestor 'class' 'class';
+    method string Get_Language_Name
+    {
+        return ([my Language].Get_Input);
+    }
+    method string Get_Property_Name
+    {
+        return ([my Language].Get_Input);
+    }
+}
+
+statement Operations 'operations' Dialect;
+statement Statements 'statements' Dialect;
+statement Syntaxes 'syntaxes' Dialect;
+
+statement Sequence 'sequence' Line
+{
+    argument Rule_Name 'method' 'method';
+}
+
+statement Tokens 'tokens' Line;
+statement Token 'token' Line
+{
+    argument Class_Name 'class' 'class';
+}
+
+operation Flag 'flag' Unary
+{
+    argument Op1 'flag' 'value';
+    property string Data_Type 'flag';
+}
+operation Number 'number' Unary
+{
+    argument Op1 'number' 'value';
+    property string Data_Type 'number';
+}
+operation String 'string' Unary
+{
+    argument Op1 'string' 'value';
+    property string Data_Type 'string';
+}
+operation Integer 'integer' Unary
+{
+    argument Op1 'integer' 'value';
+    property string Data_Type 'integer';
+}
+
+syntax Optional 'optional'
+{
+    argument Rule_Name 'method' 'method';
+}
+syntax Optrep 'optrep'
+{
+    argument Rule_Name 'method' 'method';
+}
+
+syntax Repeating 'repeating'
+{
+    argument Rule_Name 'method' 'method';
+}
+
+syntax Sequence 'sequence'
+{
+    argument Rule_Name 'method' 'method';
+}
+syntax Exclude 'exclude';
+
+statement Symbol 'symbol' Derived_Class
+{
+    keyword Type 'type' 'type';
+    argument Name 'class' 'class';
+    optional Parent_Class 'class' 'class';
+}
+
+operation Join 'join'
+{
+    argument List 'list' 'value';
+    argument Separator 'string' 'value';
+    property string Data_Type 'string';
+}
+
+statement Break 'break' Line
+{
+}
+
+statement Break_If 'break if' Line
+{
+    argument Condition 'flag' 'value';
+}
+
+statement Replace 'replace' Line
+{
+    argument Variable 'string' 'variable';
+    argument Search_Text 'string' 'value';
+    argument Replace_Text 'string' 'value';
+}
+
+statement List_Clear 'lclear' Line
+{
+    argument List 'list' 'varaible';
+}
+
+flowerbox 'python-specific language elements, the targets of python-to-gal translation. each carries python semantics and lowers to gal atomics in the fallback generators, so only atomic constructs ever need a new target-language backend.';
+
+statement Python_Print 'python print' Append_Args
+{
+}
+
+statement Python_While 'python while' If
+{
+    argument Condition 'flag' 'value';
+}
+
+statement Python_Print0 'python print0' Append_Args
+{
+}
+
+statement Python_For_Range 'python for range' For
+{
+    comment `one argument: range(Limit), zero to Limit - 1. two arguments:
+    range(Limit, Upper), Limit to Upper - 1.`;
+    argument Variable 'number' 'variable';
+    argument Limit 'number' 'value';
+    optional Upper 'number' 'value';
+}
+
+statement Python_Setitem 'python setitem' Line
+{
+    argument Target 'variant' 'value';
+    argument Key 'variant' 'value';
+    argument Value 'variant' 'value';
+}
+
+statement Python_Raise 'python raise' Line
+{
+    argument Message 'variant' 'value';
+}
+
+operation Python_Add 'py +' Binary
+{
+    argument Op1 'variant' 'value';
+    argument Op2 'variant' 'value';
+}
+operation Python_Sub 'py -' Binary
+{
+    argument Op1 'variant' 'value';
+    argument Op2 'variant' 'value';
+}
+operation Python_Mul 'py *' Binary
+{
+    argument Op1 'variant' 'value';
+    argument Op2 'variant' 'value';
+}
+operation Python_Div 'py /' Binary
+{
+    argument Op1 'variant' 'value';
+    argument Op2 'variant' 'value';
+}
+operation Python_Mod 'py mod' Binary
+{
+    argument Op1 'variant' 'value';
+    argument Op2 'variant' 'value';
+}
+operation Python_Lt 'py <' Binary
+{
+    argument Op1 'variant' 'value';
+    argument Op2 'variant' 'value';
+    property string Data_Type 'flag';
+}
+operation Python_Gt 'py >' Binary
+{
+    argument Op1 'variant' 'value';
+    argument Op2 'variant' 'value';
+    property string Data_Type 'flag';
+}
+operation Python_Le 'py <=' Binary
+{
+    argument Op1 'variant' 'value';
+    argument Op2 'variant' 'value';
+    property string Data_Type 'flag';
+}
+operation Python_Ge 'py >=' Binary
+{
+    argument Op1 'variant' 'value';
+    argument Op2 'variant' 'value';
+    property string Data_Type 'flag';
+}
+operation Python_Eq 'py =' Binary
+{
+    argument Op1 'variant' 'value';
+    argument Op2 'variant' 'value';
+    property string Data_Type 'flag';
+}
+operation Python_Ne 'py !=' Binary
+{
+    argument Op1 'variant' 'value';
+    argument Op2 'variant' 'value';
+    property string Data_Type 'flag';
+}
+operation Python_And 'py and' Binary
+{
+    argument Op1 'variant' 'value';
+    argument Op2 'variant' 'value';
+}
+operation Python_Or 'py or' Binary
+{
+    argument Op1 'variant' 'value';
+    argument Op2 'variant' 'value';
+}
+operation Python_Not 'py not' Unary
+{
+    argument Op1 'variant' 'value';
+    property string Data_Type 'flag';
+}
+operation Python_Neg 'py neg' Unary
+{
+    argument Op1 'variant' 'value';
+    property string Data_Type 'number';
+}
+operation Python_Str 'py str' Unary
+{
+    argument Op1 'variant' 'value';
+    property string Data_Type 'string';
+}
+operation Python_Len 'py len' Unary
+{
+    argument Op1 'variant' 'value';
+    property integer Python_Precedence 1;
+    property integer Javascript_Precedence 1;
+    property string Data_Type 'integer';
+}
+operation Python_In 'py in' Binary
+{
+    argument Op1 'variant' 'value';
+    argument Op2 'variant' 'value';
+    property integer Python_Precedence 11;
+    property integer Javascript_Precedence 11;
+    property string Data_Type 'flag';
+}
+operation Python_Is 'py is' Binary
+{
+    argument Op1 'variant' 'value';
+    argument Op2 'variant' 'value';
+    property integer Python_Precedence 11;
+    property integer Javascript_Precedence 11;
+    property string Data_Type 'flag';
+}
+operation Python_Is_Not 'py is not' Binary
+{
+    argument Op1 'variant' 'value';
+    argument Op2 'variant' 'value';
+    property integer Python_Precedence 11;
+    property integer Javascript_Precedence 11;
+    property string Data_Type 'flag';
+}
+operation Python_Subscript 'py sub' Binary
+{
+    argument Op1 'variant' 'value';
+    argument Op2 'variant' 'value';
+    property integer Python_Precedence 1;
+    property integer Javascript_Precedence 1;
+}
+operation Python_Isa 'py isa'
+{
+    argument Op1 'variant' 'value';
+    property integer Python_Precedence 11;
+    property integer Javascript_Precedence 11;
+    property string Data_Type 'flag';
+}
+operation Python_Slice 'py slice'
+{
+    argument Op1 'variant' 'value';
+    argument Op2 'variant' 'value';
+    argument Op3 'variant' 'value';
+    property integer Python_Precedence 1;
+    property integer Javascript_Precedence 1;
+}
+operation Python_Fstr 'py fstr'
+{
+    property integer Python_Precedence 2;
+    property integer Javascript_Precedence 2;
+    property string Data_Type 'string';
+}
+operation Python_List_Literal 'py list'
+{
+    property integer Python_Precedence 2;
+    property integer Javascript_Precedence 2;
+    property string Data_Type 'list';
+}
+operation Python_Tuple_Literal 'py tuple'
+{
+    property integer Python_Precedence 2;
+    property integer Javascript_Precedence 2;
+    property string Data_Type 'list';
+}
+operation Python_Dict_Literal 'py dict'
+{
+    property integer Python_Precedence 2;
+    property integer Javascript_Precedence 2;
+    property string Data_Type 'dictionary';
+}
+
+dialect Compiler
+{
+    english 'the compiler dialect includes the optimal set of language elements to support the gal compiler.';
+    statements,
+        Statement_Add       '+' 'add' '+=' '+ =',
+        Statement_Append    'append' 's+' 's +',
+        Statement_Argument  'argument',
+        Statement_Assign    '=',
+        Statement_Break      'break',
+        Statement_Break_If  'break if' 'breakif',
+        Statement_Call      '.',
+        Statement_Catch     'catch',
+        Statement_Class     'class' 'class is',
+        Statement_Class_Method 'class method' 'static method',
+        Statement_Class_Property 'class property' 'static property' 'class property =' 'static property =',
+        Statement_Class_Set 'class set' 'class append',
+        Statement_Colon     ':',
+        Statement_Comment   '#' 'comment' '//' '/ /',
+        Statement_Constructor 'constructor',
+        Statement_Continue  'continue',
+        Statement_Continue_If 'continue if' 'if continue' 'contif',
+        Statement_Debug     'debug',
+        Statement_Debug_If  'debug if',
+        Statement_Decrement 'decrement' '--' '- -',
+        Statement_Defined   'defined',
+        Statement_Dialect   'dialect',
+        Statement_Dictionary 'dict' 'dictionary',
+        Statement_Dictionary_Assign 'dict =' 'd =' 'd=',
+        Statement_Either    'either',
+        Statement_Else      'else',
+        Statement_Else_If   'else if',
+        Statement_English   'english',
+        Statement_Entity    'entity',
+        Statement_Error     'error',
+        Statement_File_Read 'fread' 'file read all',
+        Statement_Flag      'flag' 'flag =',
+        Statement_Flags      'flags',
+        Statement_Flowerbox 'flowerbox' 'flower box',
+        Statement_For_Each  'for each' 'foreach',
+        Statement_For_Each_In 'for each in',
+        Statement_For_Range 'for range' 'for range',
+        Statement_Forever   'forever',
+        Statement_Forgive   'forgive' 'try catch',
+        Statement_Generate  'generate',
+        Statement_Generator 'generator',
+        Statement_Global_List 'global list',
+        Statement_Handle    'handle',
+        Statement_I         'i',
+        Statement_I_Equal   'i =',
+        Statement_If        'if',
+        Statement_If_Return 'if return' 'quit :' 'quit:',
+        Statement_Include   'include',
+        Statement_Increment 'increment' '++' '+ +',
+        Statement_Inference 'inference',
+        Statement_Integer   'integer' 'integer =',
+        Statement_Integers  'integers',
+        Statement_Iterate   'iterate',
+        Statement_Join      'join',
+        Statement_Keyword   'keyword',
+        Statement_List      'list',
+        Statement_List_Clear 'lclear',
+        Statement_List_Copy 'list copy' 'list copy of' 'copy =',
+        Statement_List_Split 'list split' 'lsplit' 'split',
+        Statement_Main      'main',
+        Statement_Method    'method',
+        Statement_Module    'module',
+        Statement_My_Equal  'my =',
+        Statement_Number    'number' 'number =',
+        Statement_Numbers   'numbers',
+        Statement_Object    'object' 'object =',
+        Statement_Objects   'objects',
+        Statement_Operation 'operation',
+        Statement_Operations 'operations',
+        Statement_Optional  'optional',
+        Statement_Parser    'parser',
+        Statement_Property  'property' 'property =',
+        Statement_Propset   '. =',
+        Statement_Push      'push',
+        Statement_Python_For_Range 'python for range',
+        Statement_Python_Print 'python print',
+        Statement_Python_Print0 'python print0',
+        Statement_Python_Raise 'python raise',
+        Statement_Python_Setitem 'python setitem',
+        Statement_Python_While 'python while',
+        Statement_Readline  'readline' 'read line',
+        Statement_Return    'return',
+        Statement_Return_If 'return if' 'returnif',
+        Statement_Replace   'replace' 'replace with',
+        Statement_Say       'say' 'print' 'console' 'write line',
+        Statement_Sequence  'sequence',
+        Statement_Shell_Capture 'shell capture',
+        Statement_Statement 'statement',
+        Statement_Statements 'statements',
+        Statement_String    'string' 'string =',
+        Statement_Strings   'strings',
+        Statement_Super     'super',
+        Statement_Symbol    'symbol',
+        Statement_Syntax    'syntax',
+        Statement_Syntaxes  'syntaxes',
+        Statement_Todo      'to do' 'todo',
+        Statement_Tokens    'tokens',
+        Statement_Try       'try',
+        Statement_Undefined 'undefined' 'undef' 'un defined',
+        Statement_Variant   'variant' 'variant =' 'var',
+        Statement_Variants  'variants' 'vars',
+        Statement_Verbose   'verbose',
+        Statement_Verbosity 'verbosity',
+        Statement_Write_To  'write to' 'to file' 'dump to file' 'write to file' 'file dump'
+    ;
+
+    operations,
+        Operation_Add '+',
+        Operation_And 'and' '&',
+        Operation_Append 'append' 's+' 's +',
+        Operation_Call '.',
+        Operation_Colon ':',
+        Operation_Contains 'contains',
+        Operation_Defined 'defined',
+        Operation_Dict_Exists 'dexists' 'dict exists',
+        Operation_Dict_Get 'dget' 'dict get' 'get',
+        Operation_Divide '/',
+        Operation_Equal '=' 'eq',
+        Operation_File_Exists 'file exists' 'fexists',
+        Operation_Flag 'flag',
+        Operation_Greater '>' 'gt',
+        Operation_Greater_Equal '>=' '> =' 'ge',
+        Operation_I 'i' 'self',
+        Operation_Integer 'integer' 'int',
+        Operation_Is_A 'is a' 'isa' 'is an' 'isan',
+        Operation_Is_Ident 'is ident',
+        Operation_Is_Lower 'is lower' 'is lowercase',
+        Operation_Is_Not_A 'is not a',
+        Operation_Is_Null 'isnull' 'is null',
+        Operation_Is_Numeric 'is numeric',
+        Operation_Is_Punctuation 'is punct' 'is punctuation',
+        Operation_Is_Upper 'is upper' 'is uppercase',
+        Operation_Is_Whitespace 'is whitespace',
+        Operation_Join 'join',
+        Operation_Length 'length',
+        Operation_Less '<' 'lt',
+        Operation_Less_Equal '<=' 'le' '< =',
+        Operation_List_Get 'lget' 'list get',
+        Operation_List_Last 'llast' 'list last',
+        Operation_List_Length 'llength' 'list length',
+        Operation_Minus '-',
+        Operation_Modulo 'mod',
+        Operation_Multiply '*',
+        Operation_New 'new',
+        Operation_Not 'not' '!',
+        Operation_Not_Equal '!=' 'ne' '! =',
+        Operation_Not_Null 'notnull' 'not null',
+        Operation_Number 'number',
+        Operation_Or 'or' '|',
+        Operation_Pop 'pop',
+        Operation_Python_Add 'py +',
+        Operation_Python_And 'py and',
+        Operation_Python_Dict_Literal 'py dict',
+        Operation_Python_Div 'py /',
+        Operation_Python_Eq 'py =' 'py ==' 'py = =',
+        Operation_Python_Fstr 'py fstr',
+        Operation_Python_In 'py in',
+        Operation_Python_Is 'py is',
+        Operation_Python_Is_Not 'py is not',
+        Operation_Python_Isa 'py isa',
+        Operation_Python_Len 'py len',
+        Operation_Python_List_Literal 'py list',
+        Operation_Python_Ge 'py >=' 'py > =',
+        Operation_Python_Gt 'py >',
+        Operation_Python_Le 'py <=' 'py < =',
+        Operation_Python_Lt 'py <',
+        Operation_Python_Mod 'py mod',
+        Operation_Python_Mul 'py *',
+        Operation_Python_Ne 'py !=' 'py ! =',
+        Operation_Python_Neg 'py neg',
+        Operation_Python_Not 'py not',
+        Operation_Python_Or 'py or',
+        Operation_Python_Slice 'py slice',
+        Operation_Python_Str 'py str',
+        Operation_Python_Sub 'py -',
+        Operation_Python_Subscript 'py sub',
+        Operation_Python_Tuple_Literal 'py tuple',
+        Operation_Shift 'shift',
+        Operation_Split 'split',
+        Operation_String 'string',
+        Operation_String_Equal 's=' 'seq' 's =',
+        Operation_String_Greater 's>' 'sgt' 's >',
+        Operation_String_Greater_Equal 's>=' 'sge',
+        Operation_String_Less 's<' 'slt' 's <',
+        Operation_String_Less_Equal 's<=' 's <=' 's < =' 'sle',
+        Operation_String_Not_Equal 's!=' 'sne' 's !=' 's ! =',
+        Operation_Substring 'substring' 'substr'
+    ;
+    syntaxes,
+        Syntax_Class 'class',
+        Syntax_Class_Name 'class name',
+        Syntax_Colon ':',
+        Syntax_Dictionary 'dict' 'dictionary',
+        Syntax_Exclude 'exclude',
+        Syntax_False 'false',
+        Syntax_Flag 'flag' 'bool' 'boolean',
+        Syntax_Indent 'indent',
+        Syntax_Integer 'integer' 'int',
+        Syntax_Is 'is' 'extends',
+        Syntax_Line 'line',
+        Syntax_List 'list',
+        Syntax_My 'my',
+        Syntax_My_Class 'my class',
+        Syntax_Null 'null',
+        Syntax_Number 'number',
+        Syntax_Object 'object',
+        Syntax_Optional 'optional',
+        Syntax_Optrep 'optrep' 'optional repeating',
+        Syntax_Our 'our',
+        Syntax_Property '.' '. .' '. . .' '. . . .',
+        Syntax_Repeating 'repeating',
+        Syntax_Return 'return',
+        Syntax_Self 'self' 'me',
+        Syntax_Sequence 'sequence',
+        Syntax_String 'string',
+        Syntax_Tab 'tab',
+        Syntax_True 'true',
+        Syntax_Us 'us',
+        Syntax_Variant 'variant'
+    ;
+}

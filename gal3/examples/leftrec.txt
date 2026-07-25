@@ -1,0 +1,119 @@
+flowerbox 'left recursion validation';
+
+comment `
+This is the regression test for seed-growing left recursion support.
+The grammar below is deliberately the indirect two-rule cycle that the
+Grammar-to-gal generator emits for a directly left-recursive PEG rule
+(expr: expr + NUMBER | NUMBER): an either whose first alternative is a
+sequence that re-enters the either at the same position. Parsing
+1 + 2 + 3 must terminate, consume every token, and nest left:
+Lrec_Plus(Lrec_Plus(1 + 2) + 3).
+
+Build and run (from gal3/, after ./build):
+  cat compiler_base.txt compiler_dialect.txt attributes_inference.txt structure_inference.txt llm_inference.txt examples/leftrec.txt > /tmp/lrec.txt
+  then module-wrap and run the gal.py / fallback.py / galpy.py chain.
+`;
+
+parser Lrec
+{
+    tokens
+        Token_Number
+        ;
+    sequence Lrec_Goal
+        Lrec_Expr
+        ;
+    either Lrec_Expr
+        Lrec_Plus
+        Token_Number
+        ;
+    sequence Lrec_Plus
+        Lrec_Expr
+        '+'
+        Token_Number
+        ;
+}
+
+class Lrec_Element is Element
+{
+    property list Elements;
+}
+class Lrec_Goal is Lrec_Element;
+class Lrec_Plus is Lrec_Element;
+
+class Lrec_Compiler is Compiler
+{
+    property object Parser (new Lrec_Parser);
+
+    method number Infer_Tokens
+    {
+        object Char;
+        object Current = (new Token);
+        integer Status;
+        for each Char in [my Characters]
+        {
+            Status = (Current.Append_Character Char);
+            continue if (Status > 0);
+            Current = (Token:Factory Char);
+            if (Current is a Token_Ws)
+            {
+                continue;
+            }
+            push [my Tokens] Current;
+        }
+        return 1;
+    }
+
+    method number Infer_Elements
+    {
+        verbosity;
+        list Elems;
+        object P = [my Parser];
+        P.Text = [my Text];
+        P.Tokens = [my Tokens];
+        number Status = (P.Parse_Lrec_Goal Elems);
+        my Elements = [P.Elements];
+        i Derive_Elements;
+        integer Consumed [P.Token_Pos];
+        integer Total (llength [my Tokens]);
+        if (Consumed < Total)
+        {
+            string Msg 'PARTIAL PARSE: consumed ';
+            append Msg (string Consumed) ' of ' (string Total) ' tokens.';
+            say Msg;
+            return 0;
+        }
+        return Status;
+    }
+}
+
+main [string Source_File, string Target_File]
+{
+    object C = (new Lrec_Compiler);
+    C.File_Name = Source_File;
+    number Result 1;
+    Result = (C.Infer_Text);
+    if (Result > 0)
+    {
+        Result = (C.Infer_Characters);
+    }
+    if (Result > 0)
+    {
+        Result = (C.Infer_Tokens);
+    }
+    if (Result > 0)
+    {
+        Result = (C.Infer_Elements);
+    }
+    if ((llength [C.Elements]) > 0)
+    {
+        write (C.Element_Report) to Target_File;
+    }
+    if (Result > 0)
+    {
+        say 'leftrec parse OK';
+    }
+    else
+    {
+        say 'leftrec parse FAILED';
+    }
+}

@@ -1,0 +1,28 @@
+flowerbox 'receipt: a store receipt from a price list and a basket, program 4 of the five-languages series';
+
+module Receipt
+{
+    main
+    {
+        dict Prices;
+        Prices 'bread' d= 3;
+        Prices 'milk' d= 2;
+        Prices 'cheese' d= 7;
+        Prices 'coffee' d= 12;
+
+        list Basket 'bread' 'cheese' 'coffee' 'bread' 'milk';
+
+        say "----- corner store -----";
+        integer Total 0;
+        for each Item in Basket
+        {
+            integer Price (dget Prices Item);
+            string Line '  ';
+            append Line Item ' $' Price;
+            say Line;
+            Total = (Total + Price);
+        }
+        say "------------------------";
+        say "total $" Total;
+    }
+}

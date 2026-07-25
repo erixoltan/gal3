@@ -1,0 +1,1952 @@
+flowerbox 'mumps inference: a mumps generator growing from the hello contract';
+
+comment `
+The mumps backend, started at hello coverage and growing by the
+five-languages contract, then the java-port playbook (docs/
+mumps_design.md). It must compile what it claims and fail loudly beyond
+that, per the c_inference.txt philosophy.
+
+mumps is the persistent-database point on the language spectrum: a
+module becomes one routine, and (as coverage grows) each class becomes
+one routine of flattened labels via the inheritance inference, objects
+live in globals, and collections are sparse subscript trees. gal2's
+proven generator (gal2/src/Mumps.gal) is the reference these bodies
+port from.
+
+emission conventions: labels start in column one, command lines indent
+(spaces are fine for yottadb); strings quote with doubled ""; say maps
+to use $principal write ...,!; a module routine header does main and
+quits before the labels, so falling in from the top never executes a
+formallist label.
+`;
+
+class set Element
+{
+    property string Mumps;
+    property string Mumps_Statements '';
+    property string Mumps_End_Label '';
+    property string Mumps_Etrap_Saved '';
+    property dictionary Mumps_Locals;
+
+    method object Mumps_Owner_Method
+    {
+        comment `the enclosing frame: a method, constructor or main, which
+        is where locals are newed`;
+        if ([my Classification] is a Function_Statement)
+        {
+            return [my Classification];
+        }
+        if ([my Classification] is a Statement_Constructor)
+        {
+            return [my Classification];
+        }
+        if ([my Classification] is a Statement_Main)
+        {
+            return [my Classification];
+        }
+        forgive
+        {
+            return ([my Parent].Mumps_Owner_Method);
+        }
+        return [null];
+    }
+
+    method string Mumps_Declare [string Name]
+    {
+        comment `mumps NEW pushes a save entry that only pops when the
+        frame quits, so a NEW inside a goto-loop leaks one entry per
+        iteration and exhausts the stack on a big enough program. every
+        local therefore registers here and is newed once in its method's
+        prologue - which also matches python's function-scoped locals.
+        generation is post-order, so a method's body registers before the
+        method assembles its prologue. a declaration with no enclosing
+        frame (module top level) keeps an inline new`;
+        forgive
+        {
+            object M (i Mumps_Owner_Method);
+            if (not (M is null))
+            {
+                [M.Mumps_Locals] Name d= 'y';
+                return '';
+            }
+        }
+        return (append 'new ' Name ' ');
+    }
+
+    method string Mumps_Cond [object Op]
+    {
+        comment `python truthiness, which mumps does not share: mumps
+        reads a string numerically, so an object handle, a class name or
+        any non-numeric text evaluates to zero - false - where python
+        calls it true. a definitely-numeric operand can be tested
+        directly; everything else goes through the runtime`;
+        string Code [Op.Mumps];
+        string T (i Mumps_Arg_Data_Type Op);
+        if (T s= 'flag')
+        {
+            return Code;
+        }
+        if (T s= 'integer')
+        {
+            return Code;
+        }
+        if (T s= 'number')
+        {
+            return Code;
+        }
+        return (append '$$truthy^galrt(' Code ')');
+    }
+
+    method string Mumps_Trap_Value
+    {
+        comment `the $etrap in force around this statement: the nearest
+        enclosing guard's trap literal, or the frame's inherited %etin.
+        a guard restores this at its landing label instead of saving the
+        old value in a local, so no per-guard new is needed`;
+        forgive
+        {
+            return ([my Parent].Mumps_Trap_Here);
+        }
+        return '%etin';
+    }
+
+    method string Mumps_Trap_Here
+    {
+        comment `walking outward: a guard answers with its own trap, a
+        frame boundary ends the walk. a catch body's parent is the catch
+        statement, whose parent is the try's enclosing scope, so the try
+        it belongs to is correctly skipped`;
+        if ([my Classification] is a Statement_Forgive)
+        {
+            return (append '"quit:$estack  goto L' [my Start_Position] 'H"');
+        }
+        if ([my Classification] is a Statement_Try)
+        {
+            return (append '"quit:$estack  goto L' [my Start_Position] 'H"');
+        }
+        if ([my Classification] is a Statement_Defined)
+        {
+            return (append '"quit:$estack  goto L' [my Start_Position] 'H"');
+        }
+        if ([my Classification] is a Statement_Undefined)
+        {
+            return (append '"quit:$estack  goto L' [my Start_Position] 'H"');
+        }
+        if ([my Classification] is a Function_Statement)
+        {
+            return '%etin';
+        }
+        if ([my Classification] is a Statement_Constructor)
+        {
+            return '%etin';
+        }
+        if ([my Classification] is a Statement_Main)
+        {
+            return '%etin';
+        }
+        forgive
+        {
+            return ([my Parent].Mumps_Trap_Here);
+        }
+        return '%etin';
+    }
+
+    method string Mumps_Hoist
+    {
+        comment `the frame prologue: one new for every registered local,
+        plus the error-handling context. $estack is newed here so the
+        guard idiom quit:$estack sees zero at this frame's own level.
+        a name that is also a formal parameter must NOT be newed - that
+        would wipe the value the caller passed`;
+        string Names '%etin';
+        dictionary Params;
+        forgive
+        {
+            object PA;
+            for each PA in [my Listargs]
+            {
+                string PN [PA.Mumps];
+                Params PN d= 'y';
+            }
+        }
+        forgive
+        {
+            iterate [my Mumps_Locals] DN DV
+            {
+                if (not (Params dexists DN))
+                {
+                    append Names ',' DN;
+                }
+            }
+        }
+        return (append [indent] 'new ' Names ' set %etin=$etrap' [line]
+            [indent] 'new $etrap,$estack set $etrap=%etin' [line]);
+    }
+
+    method string Mumps_Quote [string Unquoted]
+    {
+        comment `mumps strings double their quotes; a real newline can
+        only be expressed by concatenating $char(10)`;
+        string Text Unquoted;
+        if (Text contains '"')
+        {
+            replace Text '"' '""';
+        }
+        if (Text contains [line])
+        {
+            replace Text [line] '"_$char(10)_"';
+        }
+        return (append '"' Text '"');
+    }
+
+    method string Mumps_Block
+    {
+        comment `the block's code, or empty for a bodyless statement;
+        probed through object variables because a string declaration
+        would coerce None to the text 'None' under the python host`;
+        forgive
+        {
+            object BE [my Block];
+            if (BE is an Element)
+            {
+                object BV [BE.Mumps];
+                if (not (BV is null))
+                {
+                    return BV;
+                }
+            }
+        }
+        return '';
+    }
+
+    method string Mumps_Arg_Data_Type [object Arg]
+    {
+        forgive
+        {
+            object AC [Arg.Classification];
+            object DT [AC.Data_Type];
+            if (not (DT is an Element))
+            {
+                if (not (DT is null))
+                {
+                    return DT;
+                }
+            }
+        }
+        return '';
+    }
+
+    method string Mumps_Deref [string Recv, string Sub]
+    {
+        comment `collections are matrix-node handles (reference
+        semantics, as python): the receiver expression evaluates to a
+        handle, and access double-indirects through it`;
+        if (Recv is null)
+        {
+            error 'mumps: dereferencing an ungenerated receiver';
+        }
+        return (append '@(' Recv ')@(' Sub ')');
+    }
+
+    method string Mumps_Alloc
+    {
+        comment `a fresh matrix node's handle`;
+        return '$name(@%matrix@($increment(@%matrix)))';
+    }
+
+    method string Mumps_Subscripted [string Ref, string Sub]
+    {
+        comment `extend a collection reference with one more subscript:
+        a property node @%self@("P") gains ,Sub inside its parentheses,
+        a plain local D becomes D(Sub)`;
+        if (Ref is null)
+        {
+            error 'mumps: subscripting an ungenerated reference';
+        }
+        integer L (length Ref);
+        if (L > 0)
+        {
+            string Last (substring Ref (L - 1) 1);
+            if (Last s= ')')
+            {
+                return (append (substring Ref 0 (L - 1)) ',' Sub ')');
+            }
+        }
+        return (append Ref '(' Sub ')');
+    }
+
+    method string Mumps_Break_Label
+    {
+        if ([my Classification] is an Iteration_Statement)
+        {
+            return (append 'L' [my Start_Position] 'K');
+        }
+        forgive
+        {
+            return ([my Parent].Mumps_Break_Label);
+        }
+        return 'LBREAKLOST';
+    }
+
+    method string Mumps_Continue_Label
+    {
+        if ([my Classification] is an Iteration_Statement)
+        {
+            return (append 'L' [my Start_Position] 'C');
+        }
+        forgive
+        {
+            return ([my Parent].Mumps_Continue_Label);
+        }
+        return 'LCONTINUELOST';
+    }
+
+    method string Mumps_Args [string Separator]
+    {
+        object Arg;
+        string Args_Mumps '';
+        string Between '';
+        for each Arg in [my Listargs]
+        {
+            append Args_Mumps Between [Arg.Mumps];
+            = Between Separator;
+        }
+        return Args_Mumps;
+    }
+
+    method string Mumps_Arguments [string Separator]
+    {
+        object Arg;
+        string Args_Mumps '';
+        string Between '';
+        for each Arg in [my Arguments]
+        {
+            append Args_Mumps Between [Arg.Mumps];
+            = Between Separator;
+        }
+        return Args_Mumps;
+    }
+}
+
+generator Mumps Fallback
+{
+    english 'generate mumps code for each language element, using the inferred data types.';
+
+    generate Element
+    {
+        i = '';
+    }
+
+    generate Statement
+    {
+        error 'no mumps generator for statement ' [class name];
+    }
+
+    generate Operation
+    {
+        error 'no mumps generator for operation ' [class name];
+    }
+
+    generate Syntax
+    {
+        error 'no mumps generator for syntax ' [class name];
+    }
+
+    generate Token
+    {
+        comment `mumps identifiers allow no underscores; names strip them
+        (the gal2 convention). literals go through Token_Quote and keep
+        theirs`;
+        string T [my Text];
+        if (T contains '_')
+        {
+            replace T '_' '';
+        }
+        i = T;
+    }
+
+    generate Token_Quote
+    {
+        i = (i Mumps_Quote [my Unquoted]);
+    }
+
+    generate Syntax_True
+    {
+        i = '1';
+    }
+
+    generate Syntax_False
+    {
+        i = '0';
+    }
+
+    generate Syntax_Line
+    {
+        my Unquoted = [line];
+        i = '$char(10)';
+    }
+
+    generate Program
+    {
+        string Code '';
+        object Stmt;
+        for each Stmt in [my Statements]
+        {
+            undefined [Stmt.Mumps]
+            {
+                Stmt.Infer_Mumps;
+            }
+            string S [Stmt.Mumps];
+            if (S sgt '')
+            {
+                append Code S;
+            }
+        }
+        i = Code;
+    }
+
+    generate Block
+    {
+        comment `a mumps block is just its command lines; the statements
+        already carry their own indentation, and the enclosing label
+        supplies entry and quit`;
+        string Statements '';
+        object Line;
+        for each Line in [my Statements]
+        {
+            string S [Line.Mumps];
+            if (S sgt '')
+            {
+                append Statements S;
+            }
+        }
+        my Mumps_Statements = Statements;
+        i = Statements;
+    }
+
+    generate Statement_Comment
+    {
+        i = '';
+    }
+
+    generate Statement_Flowerbox
+    {
+        i = '';
+    }
+
+    generate Statement_Module
+    {
+        comment `one routine per module: a header label, an immediate do
+        main and quit so top entry never falls into a formallist label,
+        then the labels the module body produced`;
+        string Name [my Name Mumps];
+        string Body '';
+        string Labels '';
+        string Class_Sections '';
+        object Stmt;
+        forgive
+        {
+            for each Stmt in [my Block Statements]
+            {
+                comment `class sections open their own routines, so they
+                must follow every module-level label (main included) or
+                those labels land in the wrong file`;
+                object SC2 [Stmt.Classification];
+                object SV [Stmt.Mumps];
+                if (SV is null)
+                {
+                }
+                else if (SC2 is a Class_Statement)
+                {
+                    append Class_Sections SV;
+                }
+                else
+                {
+                    if (SV sgt '')
+                    {
+                        append Labels SV;
+                    }
+                }
+            }
+        }
+        append Labels Class_Sections;
+        string Inits '';
+        flag Clash [false];
+        forgive
+        {
+            object CS;
+            for each CS in [my Block Statements]
+            {
+                forgive
+                {
+                    object CC2 [CS.Classification];
+                    if (CC2 is a Class_Statement)
+                    {
+                        string CN2 [CC2.Class_Name Mumps];
+                        replace CN2 '_' '';
+                        if (CN2 s= Name)
+                        {
+                            Clash = [true];
+                        }
+                        append Inits [indent] 'do %init^' CN2 [line];
+                    }
+                }
+            }
+        }
+        if Clash
+        {
+            comment `a class may not share the module routine's name; the
+            module steps aside, as the java backend's public class does`;
+            Name = (append Name 'Program');
+        }
+        string Code ';;;ROUTINE ' Name [line]
+            Name ' ; gal ; ' Name ' module.' [line]
+            [indent] 'do init^galrt' [line]
+            Inits
+            [indent] 'do main()' [line]
+            [indent] 'quit' [line]
+            Labels;
+        i = Code;
+    }
+
+    generate Statement_Main
+    {
+        comment `mumps has no argv: a main with parameters takes them as
+        space-separated pieces of $zcmdline after the routine name`;
+        string Params '';
+        integer N 1;
+        object Arg;
+        forgive
+        {
+            for each Arg in [my Listargs]
+            {
+                append Params [indent] 'new ' [Arg.Mumps] ' set ' [Arg.Mumps] '=$piece($zcmdline," ",' N ')' [line];
+                N = (N + 1);
+            }
+        }
+        string Code 'main() ; main program' [line]
+            (i Mumps_Hoist)
+            Params
+            (i Mumps_Block)
+            [indent] 'quit' [line];
+        i = Code;
+    }
+
+    generate Statement_Say
+    {
+        i = (append [indent] 'use $principal write ' (i Mumps_Arguments ',') ',!' [line]);
+    }
+
+    generate Statement_Debug
+    {
+        comment `the %debug routine (tools/yottadb/routines/_debug.m,
+        installed in ydb_routines) is the mumps equivalent of zdebug:
+        an interactive shell with step and watch. gal2 emitted 'break
+        %debug'; entering the shell directly is the same intent`;
+        i = (append [indent] 'do ^%debug' [line]);
+    }
+
+    generate Statement_Error
+    {
+        comment `the gal2 form: a user $ecode carrying the message, which
+        fires the nearest $etrap`;
+        i = (append [indent] 'set $ecode="U:"_' (i Mumps_Arguments '_') [line]);
+    }
+
+    generate Statement_Forgive
+    {
+        comment `the gal2 $etrap pattern: trap to a local label, clear the
+        error state, fall through. the outer $etrap is saved and restored
+        at the landing label: new alone only restores at frame pop, so
+        without the restore an error AFTER the guard would goto backward
+        into the label and loop forever`;
+        string Catch_Label 'L' [my Start_Position] 'H';
+        string Code
+            [indent] 'set $etrap="quit:$estack  goto ' Catch_Label '"' [line]
+            (i Mumps_Block)
+            Catch_Label ' ; forgiven' [line]
+            [indent] 'set $etrap=' (i Mumps_Trap_Value) ',%ecode=$zstatus,$ecode="",$zstatus=""' [line];
+        i = Code;
+    }
+
+    generate Statement_Try
+    {
+        comment `try traps to the catch label its own emission ends with;
+        the catch statement's text follows and closes with the shared end
+        label, handed over through the Next_Catch link`;
+        string End 'L' [my Start_Position] 'E';
+        string Catch_Label 'L' [my Start_Position] 'H';
+        string Restore (i Mumps_Trap_Value);
+        forgive
+        {
+            object N [my Next_Catch];
+            if (N is a Catch_Statement)
+            {
+                [N.Mumps_End_Label] = End;
+                [N.Mumps_Etrap_Saved] = Restore;
+            }
+        }
+        string Code
+            [indent] 'set $etrap="quit:$estack  goto ' Catch_Label '"' [line]
+            (i Mumps_Block)
+            [indent] 'goto ' End [line]
+            Catch_Label ' ; try catch' [line];
+        i = Code;
+    }
+
+    generate Statement_Catch
+    {
+        string Variable_Code '';
+        forgive
+        {
+            if (not ([my Error] is null))
+            {
+                Variable_Code = (append [indent] 'set ' [my Error Mumps] '=%ecode' [line]);
+            }
+        }
+        comment `restore the try's saved outer trap first, so an error in
+        the catch body escapes outward instead of looping back to the
+        catch label; the restore repeats after the end label for the
+        success path, which jumps straight there`;
+        string Code
+            [indent] 'set $etrap=' [my Mumps_Etrap_Saved] ',%ecode=$zstatus,$ecode="",$zstatus=""' [line]
+            Variable_Code
+            (i Mumps_Block)
+            [my Mumps_End_Label] ' ; end try' [line]
+            [indent] 'set $etrap=' [my Mumps_Etrap_Saved] [line];
+        i = Code;
+    }
+
+    generate Statement_Return
+    {
+        comment `the gal2 dual-context quit: an extrinsic call takes the
+        value, a do-call quits plain`;
+        string Value '""';
+        forgive
+        {
+            if (defined [my Value])
+            {
+                Value = [my Value Mumps];
+            }
+        }
+        string Code
+            [indent] 'set %("return")=' Value [line]
+            [indent] 'quit:$quit %("return") quit' [line];
+        i = Code;
+    }
+
+    generate Statement_Return_If
+    {
+        string Value '""';
+        forgive
+        {
+            if (defined [my Value])
+            {
+                Value = [my Value Mumps];
+            }
+        }
+        string Skip 'L' [my Start_Position] 'S';
+        string Code
+            [indent] 'goto:' "'" '(' (i Mumps_Cond [my Condition]) ') ' Skip [line]
+            [indent] 'set %("return")=' Value [line]
+            [indent] 'quit:$quit %("return") quit' [line]
+            Skip ' ; return-if skipped' [line];
+        i = Code;
+    }
+
+    generate Statement_If_Return
+    {
+        string Value '""';
+        forgive
+        {
+            if (defined [my Value])
+            {
+                Value = [my Value Mumps];
+            }
+        }
+        string Skip 'L' [my Start_Position] 'S';
+        string Code
+            [indent] 'goto:' "'" '(' (i Mumps_Cond [my Condition]) ') ' Skip [line]
+            [indent] 'set %("return")=' Value [line]
+            [indent] 'quit:$quit %("return") quit' [line]
+            Skip ' ; return-if skipped' [line];
+        i = Code;
+    }
+
+    generate Statement_I
+    {
+        comment `flattening makes a direct in-routine call virtually
+        correct, and the Compiled_Methods table says statically whether
+        the label exists; a method the table lacks (python's tolerated
+        missing attributes) dispatches through the runtime instead, so
+        zlink never sees a dead reference`;
+        string Args (i Mumps_Args ',');
+        string M [my Method Mumps];
+        string MN M;
+        replace MN '_' '';
+        flag Known [false];
+        forgive
+        {
+            object OC (i Get_Owner_Class);
+            if ([OC.Compiled_Methods] dexists M)
+            {
+                Known = [true];
+            }
+        }
+        string Code '';
+        if Known
+        {
+            Code = (append [indent] 'do ' MN '(%self');
+            if (Args sgt '')
+            {
+                append Code ',' Args;
+            }
+            append Code ')' [line];
+        }
+        else
+        {
+            Code = (append [indent] 'do dispatch' (llength [my Listargs]) '^galrt(%self,' (i Mumps_Quote MN));
+            if (Args sgt '')
+            {
+                append Code ',' Args;
+            }
+            append Code ')' [line];
+        }
+        i = Code;
+    }
+
+    generate Operation_I
+    {
+        string Args (i Mumps_Args ',');
+        string M [my Method Mumps];
+        string MN M;
+        replace MN '_' '';
+        flag Known [false];
+        forgive
+        {
+            object OC (i Get_Owner_Class);
+            if ([OC.Compiled_Methods] dexists M)
+            {
+                Known = [true];
+            }
+        }
+        string Code '';
+        if Known
+        {
+            Code = (append '$$' MN '(%self');
+            if (Args sgt '')
+            {
+                append Code ',' Args;
+            }
+            append Code ')';
+        }
+        else
+        {
+            Code = (append '$$dispatch' (llength [my Listargs]) '^galrt(%self,' (i Mumps_Quote MN));
+            if (Args sgt '')
+            {
+                append Code ',' Args;
+            }
+            append Code ')';
+        }
+        i = Code;
+    }
+
+    generate Syntax_Property
+    {
+        comment `a property chain on a variable holding an object handle,
+        exactly the Syntax_My shape with the variable as the base`;
+        string Code '';
+        flag First [true];
+        object Arg;
+        for each Arg in [my Arguments]
+        {
+            if First
+            {
+                Code = [Arg.Mumps];
+                First = [false];
+            }
+            else
+            {
+                Code = (append '@' Code '@(' (i Mumps_Quote [Arg.Mumps]) ')');
+            }
+        }
+        i = Code;
+    }
+
+    generate Statement_Propset
+    {
+        i = (append [indent] 'set @' [my Object Mumps] '@(' (i Mumps_Quote [my Property Mumps]) ')=' [my Value Mumps] [line]);
+    }
+
+    generate Syntax_Null
+        '""';
+
+    generate Syntax_Self
+        '%self';
+
+    generate Syntax_Indent
+    {
+        my Unquoted = '    ';
+        string Code '"    "';
+        defined [my Count]
+        {
+            Code = (append '$$repeat^galrt("    ",' [my Count Mumps] ')');
+            my Unquoted = [null];
+        }
+        i = Code;
+    }
+
+    generate Syntax_Tab
+    {
+        my Unquoted = [tab];
+        string Code '$char(9)';
+        defined [my Count]
+        {
+            Code = (append '$$repeat^galrt($char(9),' [my Count Mumps] ')');
+            my Unquoted = [null];
+        }
+        i = Code;
+    }
+
+    generate Syntax_Return
+    {
+        my Unquoted = (Runtime:Chr 13);
+        string Code '$char(13)';
+        defined [my Count]
+        {
+            Code = (append '$$repeat^galrt($char(13),' [my Count Mumps] ')');
+            my Unquoted = [null];
+        }
+        i = Code;
+    }
+
+    generate Syntax_Class_Name
+    {
+        comment `the runtime class is the blessing stored at the handle's
+        root`;
+        string Target '%self';
+        forgive
+        {
+            string T2 [my Object Mumps];
+            if (T2 sgt '')
+            {
+                Target = T2;
+            }
+        }
+        i = (append '@' Target);
+    }
+
+    generate Operation_Is_Null
+        '(' Op1 '="")';
+
+    generate Operation_Not_Null
+        '(' Op1 "'" '="")';
+
+    generate Operation_Defined
+        "(''" '$data(' Variable '))';
+
+    generate Statement_Defined
+    {
+        comment `python's None is an ABSENT node and '' is a node that
+        exists holding nothing - so 'defined' asks $data, not $get. a
+        property declared with a value is set by the constructor and is
+        defined even when that value is empty; a property declared [null]
+        (or with no value at all) is never set, so it is undefined, which
+        is exactly what python reports for None. the $etrap absorbs
+        errors from the body, the python AttributeError analogue`;
+        string H 'L' [my Start_Position] 'H';
+        string Guards '';
+        object Argument;
+        for each Argument in [my Arguments]
+        {
+            append Guards [indent] "goto:'$data(" [Argument.Mumps] ') ' H [line];
+        }
+        string Code
+            [indent] 'set $etrap="quit:$estack  goto ' H '"' [line]
+            Guards
+            (i Mumps_Block)
+            H ' ; defined' [line]
+            [indent] 'set $etrap=' (i Mumps_Trap_Value) ',%ecode=$zstatus,$ecode="",$zstatus=""' [line];
+        i = Code;
+    }
+
+    generate Statement_Undefined
+    {
+        string H 'L' [my Start_Position] 'H';
+        string Guards '';
+        object Argument;
+        for each Argument in [my Arguments]
+        {
+            append Guards [indent] 'goto:$data(' [Argument.Mumps] ') ' H [line];
+        }
+        string Code
+            [indent] 'set $etrap="quit:$estack  goto ' H '"' [line]
+            Guards
+            (i Mumps_Block)
+            H ' ; undefined' [line]
+            [indent] 'set $etrap=' (i Mumps_Trap_Value) ',%ecode=$zstatus,$ecode="",$zstatus=""' [line];
+        i = Code;
+    }
+
+    generate Operation_String_Equal
+        '(' Op1 '=' Op2 ')';
+
+    generate Operation_String_Not_Equal
+        '(' Op1 "'" '=' Op2 ')';
+
+    generate Operation_String_Greater
+        '(' Op1 ']]' Op2 ')';
+
+    generate Operation_String_Less
+        '(' Op2 ']]' Op1 ')';
+
+    generate Operation_String_Greater_Equal
+        "('(" Op2 ']]' Op1 '))';
+
+    generate Operation_String_Less_Equal
+        "('(" Op1 ']]' Op2 '))';
+
+    generate Operation_Contains
+        '(' [my String Mumps] '[' [my Search Mumps] ')';
+
+    generate Operation_Append
+        '(' (i Mumps_Arguments '_') ')';
+
+    generate Operation_String
+        [my Op1 Mumps];
+
+    generate Statement_Break
+    {
+        i = (append [indent] 'goto ' (i Mumps_Break_Label) [line]);
+    }
+
+    generate Statement_Continue
+    {
+        i = (append [indent] 'goto ' (i Mumps_Continue_Label) [line]);
+    }
+
+    generate Statement_Forever
+    {
+        string Continue 'L' [my Start_Position] 'C';
+        string Break 'L' [my Start_Position] 'K';
+        string Code
+            Continue ' ; forever' [line]
+            (i Mumps_Block)
+            [indent] 'goto ' Continue [line]
+            Break ' ; forever break' [line];
+        i = Code;
+    }
+
+    generate Statement_Flag
+    {
+        string V '0';
+        forgive
+        {
+            if (not ([my Value] is null))
+            {
+                V = [my Value Mumps];
+            }
+        }
+        i = (append [indent] (i Mumps_Declare [my Name Mumps]) 'set ' [my Name Mumps] '=' V [line]);
+    }
+
+    generate Statement_Number
+    {
+        string V '0';
+        forgive
+        {
+            if (not ([my Value] is null))
+            {
+                V = [my Value Mumps];
+            }
+        }
+        i = (append [indent] (i Mumps_Declare [my Name Mumps]) 'set ' [my Name Mumps] '=' V [line]);
+    }
+
+    generate Statement_Increment
+        [indent] 'set ' Destination '=' Destination '+1' [line];
+
+    generate Statement_Decrement
+        [indent] 'set ' Destination '=' Destination '-1' [line];
+
+    generate Statement_Add
+        [indent] 'set ' Destination '=' Destination '+' Increment [line];
+
+    generate Operation_List_Length
+    {
+        comment `python len serves strings and collections: a string-typed
+        receiver measures with $length, a known list walks, and an
+        unknown-typed one goes through the trap-based runtime len`;
+        string T (i Mumps_Arg_Data_Type [my List]);
+        if (T s= 'string')
+        {
+            i = (append '$length(' [my List Mumps] ')');
+        }
+        else if ((T s= 'list') or (T s= 'dictionary'))
+        {
+            i = (append '$$llen^galrt(' [my List Mumps] ')');
+        }
+        else
+        {
+            i = (append '$$len^galrt(' [my List Mumps] ')');
+        }
+    }
+
+    generate Operation_Shift
+        '$$shift^galrt(' List ')';
+
+    generate Operation_Pop
+        '$$poplast^galrt(' List ')';
+
+    generate Operation_List_Last
+        '$$last^galrt(' List ')';
+
+    generate Operation_List_Get
+    {
+        comment `gal list offsets are zero-based; stored subscripts start
+        at 1 and may have holes after shifts, so the runtime walks`;
+        i = (append '$$lget^galrt(' [my List Mumps] ',' [my Offset Mumps] ')');
+    }
+
+    generate Statement_List_Clear
+        [indent] 'kill @(' List ') set @(' List ')=0' [line];
+
+    generate Statement_List_Copy
+    {
+        comment `an explicit shallow copy: a fresh node, then a merge of
+        the source handle's subtree`;
+        string T [my Target Mumps];
+        string Code [indent] 'set ' T '=' (i Mumps_Alloc) [line]
+            [indent] 'set @' T '=0' [line];
+        forgive
+        {
+            if (not ([my Source] is null))
+            {
+                append Code [indent] 'merge @' T '=@(' [my Source Mumps] ')' [line];
+            }
+        }
+        i = Code;
+    }
+
+    generate Operation_Substring
+    {
+        comment `$extract is one-based and inclusive, and clamps like a
+        python slice`;
+        string S [my String_Value Mumps];
+        string Start [my Start_Index Mumps];
+        string Code;
+        if (defined [my Length])
+        {
+            Code = (append '$extract(' S ',' Start '+1,' Start '+' [my Length Mumps] ')');
+        }
+        else
+        {
+            Code = (append '$extract(' S ',' Start '+1,$length(' S '))');
+        }
+        i = Code;
+    }
+
+    generate Operation_Length
+        '$length(' First ')';
+
+    generate Statement_Replace
+        [indent] 'set ' Variable '=$$replace^galrt(' Variable ',' Search_Text ',' Replace_Text ')' [line];
+
+    generate Statement_Objects
+    {
+        string Code '';
+        object Arg;
+        for each Arg in [my Arguments]
+        {
+            append Code [indent] (i Mumps_Declare [Arg.Mumps]) 'set ' [Arg.Mumps] '=""' [line];
+        }
+        i = Code;
+    }
+
+    generate Declarations_Statement
+    {
+        string Code '';
+        object Arg;
+        for each Arg in [my Arguments]
+        {
+            append Code [indent] (i Mumps_Declare [Arg.Mumps]) 'set ' [Arg.Mumps] '=""' [line];
+        }
+        i = Code;
+    }
+
+    generate Declaration_Statement
+    {
+        string V '""';
+        forgive
+        {
+            if (not ([my Value] is null))
+            {
+                V = [my Value Mumps];
+            }
+        }
+        i = (append [indent] (i Mumps_Declare [my Name Mumps]) 'set ' [my Name Mumps] '=' V [line]);
+    }
+
+    generate Statement_Global_List
+        [indent] (i Mumps_Declare [my Name Mumps]) 'set ' [my Name Mumps] '=' (i Mumps_Alloc) [line]
+        [indent] 'set @' [my Name Mumps] '=0' [line];
+
+    generate Operation_Dict_Exists
+        '$$dhas^galrt(' Dictionary ',' Key ')';
+
+    generate Syntax_Colon
+    {
+        comment `a class property reference: class properties live in the
+        matrix under %cp, so they are transient or persistent exactly as
+        objects are`;
+        string CN '';
+        string PN '';
+        forgive
+        {
+            object A1 (lget [my Arguments] 0);
+            CN = [A1.Mumps];
+            object A2 (lget [my Arguments] 1);
+            PN = [A2.Mumps];
+        }
+        replace CN '_' '';
+        i = (append '@%matrix@("%cp",' (i Mumps_Quote CN) ',' (i Mumps_Quote PN) ')');
+    }
+
+    generate Operation_Colon
+    {
+        comment `a class-qualified call; Runtime Chr is the character
+        function, anything else is a class-method extrinsic`;
+        string CN [my Class Mumps];
+        string MN [my Method Mumps];
+        if (CN s= 'Runtime')
+        {
+            if (MN s= 'Chr')
+            {
+                i = (append '$char(' (i Mumps_Args ',') ')');
+            }
+            else
+            {
+                error 'mumps generator: runtime method not ported: ' MN;
+            }
+        }
+        else
+        {
+            replace CN '_' '';
+            replace MN '_' '';
+            i = (append '$$' MN '^' CN '(' (i Mumps_Args ',') ')');
+        }
+    }
+
+    generate Statement_Colon
+    {
+        string CN [my Class_Name Mumps];
+        string MN [my Method_Name Mumps];
+        replace CN '_' '';
+        replace MN '_' '';
+        i = (append [indent] 'do ' MN '^' CN '(' (i Mumps_Args ',') ')' [line]);
+    }
+
+    generate Statement_Class_Method
+    {
+        comment `a class method label takes no %self`;
+        string MName [my Name Mumps];
+        replace MName '_' '';
+        string Args (i Mumps_Args ',');
+        string Code MName '(' Args ') ; class method' [line]
+            (i Mumps_Hoist)
+            (i Mumps_Block)
+            [indent] 'quit' [line];
+        i = Code;
+    }
+
+    generate Syntax_My_Class
+        '@%self';
+
+    generate Operation_Is_A
+    {
+        string Object_Code [my Object Mumps];
+        string Code '';
+        string Between '';
+        object Arg;
+        for each Arg in [my Listargs]
+        {
+            string CN [Arg.Mumps];
+            replace CN '_' '';
+            append Code Between '$$isa^galrt(' Object_Code ',' (i Mumps_Quote CN) ')';
+            Between = '!';
+        }
+        i = (append '(' Code ')');
+    }
+
+    generate Operation_Is_Not_A
+    {
+        string Object_Code [my Object Mumps];
+        string Code '';
+        string Between '';
+        object Arg;
+        for each Arg in [my Listargs]
+        {
+            string CN [Arg.Mumps];
+            replace CN '_' '';
+            append Code Between '$$isa^galrt(' Object_Code ',' (i Mumps_Quote CN) ')';
+            Between = '!';
+        }
+        i = (append "('(" Code '))');
+    }
+
+    generate Operation_Is_Whitespace
+        '(" "_$char(9)_$char(10)_$char(13)[' Character ')';
+
+    generate Operation_Is_Ident
+        '$$isident^galrt(' Character ')';
+
+    generate Operation_Is_Upper
+        '$$isupper^galrt(' First ')';
+
+    generate Operation_Is_Lower
+        '$$islower^galrt(' First ')';
+
+    generate Operation_Is_Punctuation
+        '$$ispunct^galrt(' Character ')';
+
+    generate Operation_Is_Numeric
+        '($get(' Character ')=+$get(' Character '))';
+
+    generate Statement_Join
+        [indent] 'set ' Variable '=$$join^galrt(' List ',' Delimiter ')' [line];
+
+    generate Operation_Join
+        '$$join^galrt(' List ',' Separator ')';
+
+    generate Operation_Split
+    {
+        comment `the expression form allocates a fresh matrix node,
+        splits into it, and yields the handle`;
+        i = (append '$$splitnew^galrt(' [my String Mumps] ',' [my Delimiter Mumps] ')');
+    }
+
+    generate Statement_List_Split
+        [indent] 'set ' Variable '=$$splitnew^galrt(' String ',' Delimiter ')' [line];
+
+    generate Statement_File_Read
+        [indent] 'set ' Variable '=$$fileread^galrt(' File_Name ')' [line];
+
+    generate Statement_Write_To
+        [indent] 'do writeto^galrt(' File ',' Text ')' [line];
+
+    generate Operation_File_Exists
+        '$$fexists^galrt(' Path ')';
+
+    generate Statement_Iterate
+    {
+        comment `dictionaries iterate in insertion order (the python host
+        contract): an internal cursor walks the "o" sequence, whose values
+        are the keys`;
+        string D [my Dictionary Mumps];
+        string K [my Key_Variable Mumps];
+        string V [my Value_Variable Mumps];
+        string Cursor '%it' [my Start_Position];
+        string Continue 'L' [my Start_Position] 'C';
+        string Break 'L' [my Start_Position] 'K';
+        string Code
+            [indent] (i Mumps_Declare Cursor) 'set ' Cursor '=""' [line]
+            Continue ' ; iterate continue' [line]
+            [indent] 'set ' Cursor '=$order(@(' D ')@("o",' Cursor '))' [line]
+            [indent] 'goto:' Cursor '="" ' Break [line]
+            [indent] (i Mumps_Declare K) 'set ' K '=@(' D ')@("o",' Cursor ')' [line]
+            [indent] (i Mumps_Declare V) 'set ' V '=$$dget^galrt(' D ',' K ')' [line]
+            (i Mumps_Block)
+            [indent] 'goto ' Continue [line]
+            Break ' ; iterate break' [line];
+        i = Code;
+    }
+
+    generate Statement_If
+    {
+        comment `flat label control flow, the gal2 pattern: the if command
+        sets $test, an argumentless else routes around the block, and the
+        whole chain shares one end label. labels derive from the chain
+        head's character position - unique and deterministic, no counter.
+        the head walks its Next_Else chain (whose links may point at any
+        following statement, so each target's kind is checked) handing the
+        end label to every member`;
+        string End 'L' [my Start_Position] 'E';
+        string Else_Label 'L' [my Start_Position] 'X';
+        flag Last [true];
+        object N [null];
+        forgive
+        {
+            N = [my Next_Else];
+        }
+        forever
+        {
+            if (N is null)
+            {
+                break;
+            }
+            flag Chained [false];
+            if (N is an Else_If_Statement)
+            {
+                Chained = [true];
+            }
+            if (N is an Else_Statement)
+            {
+                Chained = [true];
+            }
+            if (not Chained)
+            {
+                break;
+            }
+            Last = [false];
+            [N.Mumps_End_Label] = End;
+            if (N is an Else_Statement)
+            {
+                break;
+            }
+            object N2 [null];
+            forgive
+            {
+                N2 = [N.Next_Else];
+            }
+            N = N2;
+        }
+        string Code [indent] 'if ' (i Mumps_Cond [my Condition]) [line]
+            [indent] 'else  goto ' Else_Label [line]
+            (i Mumps_Block)
+            [indent] 'goto ' End [line]
+            Else_Label ' ; if-else' [line];
+        if Last
+        {
+            append Code End ' ; end if' [line];
+        }
+        i = Code;
+    }
+
+    generate Statement_Else_If
+    {
+        string End [my Mumps_End_Label];
+        string Else_Label 'L' [my Start_Position] 'X';
+        flag Last [true];
+        forgive
+        {
+            object N [my Next_Else];
+            if (N is an Else_If_Statement)
+            {
+                Last = [false];
+            }
+            if (N is an Else_Statement)
+            {
+                Last = [false];
+            }
+        }
+        string Code [indent] 'if ' (i Mumps_Cond [my Condition]) [line]
+            [indent] 'else  goto ' Else_Label [line]
+            (i Mumps_Block)
+            [indent] 'goto ' End [line]
+            Else_Label ' ; else-if-else' [line];
+        if Last
+        {
+            append Code End ' ; end if' [line];
+        }
+        i = Code;
+    }
+
+    generate Statement_Else
+    {
+        string Code (i Mumps_Block)
+            [my Mumps_End_Label] ' ; end if' [line];
+        i = Code;
+    }
+
+    generate Statement_For_Range
+    {
+        comment `a label loop, the gal2 pattern: begin / body / continue
+        bumps and re-tests / break. $select keys the boundary test on the
+        increment's sign, so counting down works unchanged`;
+        string Variable [my Variable Mumps];
+        string Start [my Start Mumps];
+        string End [my End Mumps];
+        string Increment '1';
+        if (defined [my Increment])
+        {
+            Increment = [my Increment Mumps];
+        }
+        string Begin 'L' [my Start_Position] 'B';
+        string Continue 'L' [my Start_Position] 'C';
+        string Break 'L' [my Start_Position] 'K';
+        string Code
+            [indent] 'set ' Variable '=' Start [line]
+            [indent] 'goto:$select(' Increment '<0:' Variable '<' End ',1:' Variable '>' End ') ' Break [line]
+            [indent] 'goto ' Begin [line]
+            Continue ' ; for range continue' [line]
+            [indent] 'goto:$select(' Increment '<0:' Variable '+' Increment '<' End ',1:' Variable '+' Increment '>' End ') ' Break [line]
+            [indent] 'set ' Variable '=' Variable '+' Increment [line]
+            Begin ' ; for ' Variable ' range begin' [line]
+            (i Mumps_Block)
+            [indent] 'goto ' Continue [line]
+            Break ' ; for ' Variable ' range break' [line];
+        i = Code;
+    }
+
+    generate Operation_Equal
+        '(' Op1 '=' Op2 ')';
+
+    generate Operation_Not_Equal
+        '(' Op1 "'=" Op2 ')';
+
+    generate Operation_Modulo
+        '(' Op1 '#' Op2 ')';
+
+    generate Operation_Add
+        '(' Op1 '+' Op2 ')';
+
+    generate Operation_Minus
+        '(' Op1 '-' Op2 ')';
+
+    generate Operation_Multiply
+        '(' Op1 '*' Op2 ')';
+
+    generate Operation_Divide
+        '(' Op1 '/' Op2 ')';
+
+    generate Operation_Greater
+        '(' Op1 '>' Op2 ')';
+
+    generate Operation_Less
+        '(' Op1 '<' Op2 ')';
+
+    generate Operation_Greater_Equal
+        "(" Op1 "'<" Op2 ")";
+
+    generate Operation_Less_Equal
+        "(" Op1 "'>" Op2 ")";
+
+    generate Operation_And
+    {
+        comment `mumps & evaluates both operands; $select evaluates only
+        the chosen branch, which restores python's short-circuit guard
+        idiom (isa-check and member-read)`;
+        i = (append '$select(' "'" '(' (i Mumps_Cond [my Op1]) '):0,1:' "''" '(' (i Mumps_Cond [my Op2]) '))');
+    }
+
+    generate Operation_Or
+    {
+        i = (append '$select((' (i Mumps_Cond [my Op1]) '):1,1:' "''" '(' (i Mumps_Cond [my Op2]) '))');
+    }
+
+    generate Operation_Not
+    {
+        comment `the operand must be parenthesized BEFORE the not: mumps
+        applies unary ' to the immediately following operand only, so
+        'A="" would negate A and then compare that to "" - the opposite
+        of the intent`;
+        i = (append "'(" (i Mumps_Cond [my Op1]) ')');
+    }
+
+    generate Statement_Class
+    {
+        comment `one routine per class, flattened by the inheritance
+        inference: every inherited member lands as a label here, so a
+        dispatch is one computed call - the flattening is the vtable.
+        the program emits a routine bundle; ;;;ROUTINE markers let the
+        driver split it into files. the constructor allocates a node in
+        the object matrix, blesses it with the class name, applies the
+        property defaults, then runs the declared constructor body`;
+        string Name '';
+        forgive
+        {
+            Name = [my Class_Name Mumps];
+        }
+        if (Name seq '')
+        {
+            i = '';
+        }
+        else
+        {
+        replace Name '_' '';
+        string Props '';
+        string Methods '';
+        string N2;
+        object Stmt;
+        iterate [my Compiled_Properties] N2 Stmt
+        {
+            comment `property keys match the reader side (underscores
+            stripped); list and dictionary properties allocate their node
+            and store its handle, giving reference semantics`;
+            string PN N2;
+            replace PN '_' '';
+            string PT '';
+            forgive
+            {
+                object PTE [Stmt.Type];
+                if (PTE is an Element)
+                {
+                    PT = (PTE.Get_Input);
+                }
+            }
+            if ((PT s= 'list') or (PT s= 'dictionary'))
+            {
+                append Props [indent] 'set @%self@(' (i Mumps_Quote PN) ')=' (i Mumps_Alloc) [line]
+                    [indent] 'set @(@%self@(' (i Mumps_Quote PN) '))=0' [line];
+            }
+            else
+            {
+                comment `a property declared [null], or with no value at
+                all, is python's None: leave the node ABSENT so 'defined'
+                answers false for it. a declared value - even '' - sets
+                the node, so 'defined' answers true, as python's
+                'is not None' does`;
+                string V '';
+                flag Has_Value [false];
+                forgive
+                {
+                    object VE [Stmt.Value];
+                    if (VE is an Element)
+                    {
+                        if (not (VE is a Syntax_Null))
+                        {
+                            V = [VE.Mumps];
+                            Has_Value = [true];
+                        }
+                    }
+                }
+                if Has_Value
+                {
+                    append Props [indent] 'set @%self@(' (i Mumps_Quote PN) ')=' V [line];
+                }
+            }
+        }
+        iterate [my Compiled_Methods] N2 Stmt
+        {
+            object MV [Stmt.Mumps];
+            if (MV is null)
+            {
+                error 'mumps: method did not generate: ' N2;
+            }
+            append Methods MV;
+        }
+        string Ctor_Args '';
+        string Ctor_Body '';
+        forgive
+        {
+            object CC [my Compiled_Constructor];
+            if (CC is an Element)
+            {
+                Ctor_Args = (CC.Mumps_Args ',');
+                Ctor_Body = (append (CC.Mumps_Hoist) (CC.Mumps_Block));
+            }
+        }
+        string Meta '';
+        comment `the gal2 convention: every class loads a program-wide
+        %ClassName variable holding its handle (the class name), visible
+        in the debugger and stable across new scoping`;
+        append Meta [indent] 'set %' Name '=' (i Mumps_Quote Name) [line];
+        append Meta [indent] 'set @%matrix@("%c",' (i Mumps_Quote Name) ',' (i Mumps_Quote Name) ')=""' [line];
+        iterate [my Compiled_Ancestors] N2 Stmt
+        {
+            string AN N2;
+            replace AN '_' '';
+            append Meta [indent] 'set @%matrix@("%c",' (i Mumps_Quote Name) ',' (i Mumps_Quote AN) ')=""' [line];
+        }
+        iterate [my Compiled_Class_Properties] N2 Stmt
+        {
+            string CPN N2;
+            replace CPN '_' '';
+            string CPT '';
+            forgive
+            {
+                object CPTE [Stmt.Type];
+                if (CPTE is an Element)
+                {
+                    CPT = (CPTE.Get_Input);
+                }
+            }
+            string CV '""';
+            if ((CPT s= 'list') or (CPT s= 'dictionary'))
+            {
+                CV = (i Mumps_Alloc);
+            }
+            else
+            {
+                forgive
+                {
+                    object CVE [Stmt.Value];
+                    if (CVE is an Element)
+                    {
+                        CV = [CVE.Mumps];
+                    }
+                }
+            }
+            append Meta [indent] 'set:' "'" '$data(@%matrix@("%cp",' (i Mumps_Quote Name) ',' (i Mumps_Quote CPN) ')) @%matrix@("%cp",' (i Mumps_Quote Name) ',' (i Mumps_Quote CPN) ')=' CV [line];
+        }
+        string Class_Methods '';
+        iterate [my Compiled_Class_Methods] N2 Stmt
+        {
+            forgive
+            {
+                append Class_Methods [Stmt.Mumps];
+            }
+        }
+        string Code ';;;ROUTINE ' Name [line]
+            Name ' ; gal ; ' Name ' class.' [line]
+            [indent] 'quit' [line]
+            '%init() ; class registration: ancestors and class properties' [line]
+            Meta
+            [indent] 'quit' [line]
+            Class_Methods
+            'new(' Ctor_Args ') ; constructor' [line]
+            [indent] 'new %self set %self=$name(@%matrix@($increment(@%matrix)))' [line]
+            [indent] 'set @%self=' (i Mumps_Quote Name) [line]
+            Props
+            Ctor_Body
+            [indent] 'quit:$quit %self quit' [line]
+            Methods;
+        i = Code;
+        }
+    }
+
+    generate Statement_Constructor
+    {
+        comment `the class generator assembles the constructor label from
+        this statement's arguments and block`;
+        i = '';
+    }
+
+    generate Statement_Property
+    {
+        i = '';
+    }
+
+    generate Statement_Method
+    {
+        string MName [my Name Mumps];
+        replace MName '_' '';
+        string Args (i Mumps_Args ',');
+        string Code MName '(%self';
+        if (Args sgt '')
+        {
+            append Code ',' Args;
+        }
+        append Code ') ; method' [line]
+            (i Mumps_Hoist)
+            (i Mumps_Block)
+            [indent] 'quit' [line];
+        i = Code;
+    }
+
+    generate Argument_Syntax
+    {
+        i = [my Variable Mumps];
+    }
+
+    generate Syntax_My
+    {
+        comment `a property reference: the object handle is a $name, so
+        one level of name indirection reaches the property node, and a
+        chain re-indirects through each level's stored handle`;
+        string Code '';
+        flag First [true];
+        object Arg;
+        for each Arg in [my Arguments]
+        {
+            if First
+            {
+                Code = (append '@%self@(' (i Mumps_Quote [Arg.Mumps]) ')');
+                First = [false];
+            }
+            else
+            {
+                Code = (append '@(' Code ')@(' (i Mumps_Quote [Arg.Mumps]) ')');
+            }
+        }
+        i = Code;
+    }
+
+    generate Statement_My_Equal
+        [indent] 'set @%self@(' (i Mumps_Quote [my Property_Name Mumps]) ')=' Value [line];
+
+    generate Statement_Call
+    {
+        string Args (i Mumps_Args ',');
+        string Code [indent] 'do dispatch' (llength [my Listargs]) '^galrt(' [my Object Mumps] ',' (i Mumps_Quote [my Method Mumps]);
+        if (Args sgt '')
+        {
+            append Code ',' Args;
+        }
+        append Code ')' [line];
+        i = Code;
+    }
+
+    generate Operation_Call
+    {
+        string Args (i Mumps_Args ',');
+        string Code '$$dispatch' (llength [my Listargs]) '^galrt(' [my Object Mumps] ',' (i Mumps_Quote [my Method Mumps]);
+        if (Args sgt '')
+        {
+            append Code ',' Args;
+        }
+        append Code ')';
+        i = Code;
+    }
+
+    generate Operation_New
+    {
+        comment `a plain class name news directly; a computed class (new
+        [my class]) goes through the runtime's entryref indirection by
+        arity`;
+        string CN [my Class_Name Mumps];
+        if ((CN contains '@') or (CN contains '('))
+        {
+            string Args (i Mumps_Args ',');
+            string Code '$$create' (llength [my Listargs]) '^galrt(' CN;
+            if (Args sgt '')
+            {
+                append Code ',' Args;
+            }
+            append Code ')';
+            i = Code;
+        }
+        else
+        {
+            replace CN '_' '';
+            i = (append '$$new^' CN '(' (i Mumps_Args ',') ')');
+        }
+    }
+
+    generate Statement_Object
+    {
+        string V '""';
+        forgive
+        {
+            if (not ([my Value] is null))
+            {
+                V = [my Value Mumps];
+            }
+        }
+        i = (append [indent] (i Mumps_Declare [my Name Mumps]) 'set ' [my Name Mumps] '=' V [line]);
+    }
+
+    generate Statement_String
+    {
+        comment `a string declaration concatenates every value operand,
+        so join the whole Listargs with the M concatenation operator`;
+        string V '""';
+        forgive
+        {
+            if ((llength [my Listargs]) > 0)
+            {
+                V = (i Mumps_Args '_');
+            }
+        }
+        i = (append [indent] (i Mumps_Declare [my Name Mumps]) 'set ' [my Name Mumps] '=' V [line]);
+    }
+
+    generate Statement_Integer
+    {
+        string V '0';
+        forgive
+        {
+            if (not ([my Value] is null))
+            {
+                V = [my Value Mumps];
+            }
+        }
+        i = (append [indent] (i Mumps_Declare [my Name Mumps]) 'set ' [my Name Mumps] '=' V [line]);
+    }
+
+    generate Statement_Assign
+        [indent] 'set ' Destination '=' Value [line];
+
+    generate Statement_Dictionary
+    {
+        i = (append [indent] (i Mumps_Declare [my Name Mumps]) 'set ' [my Name Mumps] '=' (i Mumps_Alloc) [line]);
+    }
+
+    generate Statement_Dictionary_Assign
+        [indent] 'do dset^galrt(' Dict ',' Subscript ',' Value ')' [line];
+
+    generate Operation_Dict_Get
+        '$$dget^galrt(' Dictionary ',' Key ')';
+
+    generate Statement_List
+    {
+        comment `a list is a matrix node referenced by handle: numeric
+        subscripts under it, the append high-water at its root, insertion
+        order as iteration order. handle copies give python's reference
+        semantics`;
+        string Name [my Name Mumps];
+        string Code [indent] (i Mumps_Declare Name) 'set ' Name '=' (i Mumps_Alloc) [line]
+            [indent] 'set @' Name '=0' [line];
+        object Arg;
+        for each Arg in [my Listargs]
+        {
+            append Code [indent] 'do lpush^galrt(' Name ',' [Arg.Mumps] ')' [line];
+        }
+        i = Code;
+    }
+
+    generate Statement_Push
+    {
+        comment `all list mutation goes through the runtime so the count
+        node stays truthful and llength is O(1)`;
+        string List [my List Mumps];
+        string Code '';
+        object Arg;
+        for each Arg in [my Listargs]
+        {
+            append Code [indent] 'do lpush^galrt(' List ',' [Arg.Mumps] ')' [line];
+        }
+        i = Code;
+    }
+
+    generate Statement_For_Each
+    {
+        comment `the gal2 $order walk with position-derived labels, but
+        through the runtime cursor pair so one loop shape covers both
+        collection kinds: lists yield values in append order, dictionaries
+        yield keys in insertion order - the python host contract`;
+        string List [my List Mumps];
+        string Item [my Item Mumps];
+        string Index '%fe' [my Start_Position];
+        string Continue 'L' [my Start_Position] 'C';
+        string Break 'L' [my Start_Position] 'K';
+        string Code [indent] (i Mumps_Declare Index) 'set ' Index '=""' [line]
+            Continue ' ; for each ' Item ' continue' [line]
+            [indent] 'set ' Index '=$$iternext^galrt(' List ',' Index ')' [line]
+            [indent] 'goto:' Index '="" ' Break [line]
+            [indent] (i Mumps_Declare Item) 'set ' Item '=$$iterval^galrt(' List ',' Index ')' [line]
+            (i Mumps_Block)
+            [indent] 'goto ' Continue [line]
+            Break ' ; for each ' Item ' break' [line];
+        i = Code;
+    }
+
+    generate Statement_For_Each_In
+    {
+        string List [my List Mumps];
+        string Item [my Item Mumps];
+        string Index '%fe' [my Start_Position];
+        string Continue 'L' [my Start_Position] 'C';
+        string Break 'L' [my Start_Position] 'K';
+        string Code [indent] (i Mumps_Declare Index) 'set ' Index '=""' [line]
+            Continue ' ; for each ' Item ' continue' [line]
+            [indent] 'set ' Index '=$$iternext^galrt(' List ',' Index ')' [line]
+            [indent] 'goto:' Index '="" ' Break [line]
+            [indent] (i Mumps_Declare Item) 'set ' Item '=$$iterval^galrt(' List ',' Index ')' [line]
+            (i Mumps_Block)
+            [indent] 'goto ' Continue [line]
+            Break ' ; for each ' Item ' break' [line];
+        i = Code;
+    }
+
+    generate Statement_Append
+    {
+        string V [my Variable Mumps];
+        string Code [indent] 'set ' V '=' V;
+        object Arg;
+        for each Arg in [my Listargs]
+        {
+            append Code '_' [Arg.Mumps];
+        }
+        append Code [line];
+        i = Code;
+    }
+
+    generate Statement_Readline
+    {
+        comment `string literals are prompts, names are input variables,
+        mirroring the other backends' readline shape`;
+        string Code '';
+        string Prompt '';
+        string PBetween '';
+        objects Arg Argc;
+        for each Arg in [my Arguments]
+        {
+            Argc = [Arg.Classification];
+            if (Argc is a Token_Quote)
+            {
+                append Prompt PBetween [Arg.Mumps];
+                PBetween = ',';
+            }
+            else
+            {
+                if (Prompt sgt '')
+                {
+                    append Code [indent] 'use $principal write ' Prompt [line];
+                    Prompt = '';
+                    PBetween = '';
+                }
+                append Code [indent] (i Mumps_Declare [Arg.Mumps]) 'read ' [Arg.Mumps] [line];
+            }
+        }
+        i = Code;
+    }
+}
+
+class Mumps_Compiler is Fallback_Compiler
+{
+    constructor
+    {
+        my Generator = (new Mumps_Generator [self]);
+    }
+    method void Print_Errors
+    {
+        object E;
+        for each E in [my Elements]
+        {
+            if (not ([E.Error] is null))
+            {
+                say [line]
+                    [class name [E.Classification]]
+                    ': '
+                    (substring (E.Get_Input) 0 80);
+                say 'ERROR: ' [E.Error];
+            }
+        }
+    }
+    method number Infer_Code
+    {
+        verbosity;
+        [my Generator Elements] = [my Elements];
+        number Status = ([my Generator].Infer_Gal);
+        if (not Status)
+        {
+            i Print_Errors;
+            say 'Error in Mumps inference, inferring gal';
+            return 0;
+        }
+        Status = ([my Generator].Infer_Fallback);
+        if (not Status)
+        {
+            i Print_Errors;
+            say 'Error in Mumps inference, inferring fallback';
+            return 0;
+        }
+        Status = ([my Generator].Infer_Mumps);
+        if (not Status)
+        {
+            comment `a subset backend fails loudly: a generator error on any
+            element must fail the compile, not leak None into the output`;
+            i Print_Errors;
+            say 'Error in Mumps inference, inferring mumps';
+            return 0;
+        }
+        object Top = (llast [my Elements]);
+        try
+        {
+            if ([Top.Mumps] is null)
+            {
+                Top.Infer_Mumps;
+            }
+        }
+        catch Error
+        {
+            i Print_Errors;
+            say 'Error in Mumps inference: ' Error;
+            return 0;
+        }
+        my Mumps = [Top.Mumps];
+        return 1;
+    }
+}

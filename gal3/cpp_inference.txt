@@ -1,0 +1,1044 @@
+flowerbox 'c++ inference: a c++ generator covering the five-languages program contract';
+
+comment `
+The c++ backend, built for the five-languages article: it must compile the
+five contract programs (hello, fizzbuzz, bank, receipt, checkout) and fail
+loudly beyond them, per the c_inference.txt philosophy.
+
+c++ holds the native-code, manual-memory point on the spectrum, but with
+the standard library carrying the collections: dict -> std::map with the
+value type read from the first sibling d= assignment, list -> std::vector,
+say -> a std::cout << chain, append -> string + concatenation with
+std::to_string wrapping the numeric pieces, readline -> std::getline
+(std::cin is tied to std::cout, so prompts flush by themselves), and a
+string operand in a numeric operation -> an inline std::stoi or std::stod.
+
+objects live on the stack: a gal class becomes a plain c++ class with
+in-class member initializers for the property defaults, and an object
+declaration constructs the instance in place. gal objects are
+reference-typed, and stack objects are value-typed, so anything that
+would expose the difference - assigning an object, passing one as an
+argument, returning one - is outside the contract and fails loudly.
+
+includes collect in class-level registries on Element, exactly as the go
+backend's imports do. no helper functions are needed: every conversion
+c++ requires is an expression.
+`;
+
+class set Element
+{
+    property string Cpp;
+    property string Cpp_Statements '';
+    class property list Cpp_Includes;
+    class property dictionary Cpp_Include_Set;
+    class property list Cpp_Helpers;
+    class property dictionary Cpp_Helper_Set;
+
+    method void Cpp_Include [string Path]
+    {
+        return if ([my Cpp_Include_Set] dexists Path);
+        push [my Cpp_Includes] Path;
+        [my Cpp_Include_Set] Path d= [true];
+    }
+
+    method void Cpp_Helper [string Code]
+    {
+        return if ([my Cpp_Helper_Set] dexists Code);
+        push [my Cpp_Helpers] Code;
+        [my Cpp_Helper_Set] Code d= [true];
+    }
+
+    method string Cpp_Arg_Data_Type [object Arg]
+    {
+        forgive
+        {
+            object AC [Arg.Classification];
+            string T [AC.Data_Type];
+            return '' if (T is an Element);
+            return T;
+        }
+        return '';
+    }
+
+    method string Cpp_Type [string T]
+    {
+        return 'int' if (T s= 'integer');
+        return 'double' if (T s= 'number');
+        if (T s= 'string')
+        {
+            i Cpp_Include 'string';
+            return 'std::string';
+        }
+        return 'bool' if (T s= 'flag');
+        error 'c++ generator: no c++ type for gal type ' T;
+    }
+
+    method string Cpp_Value_Type [object Arg]
+    {
+        comment `the c++ type of a literal or typed argument, used to give
+        maps and vectors their element types`;
+        forgive
+        {
+            object AC [Arg.Classification];
+            if (AC is a Token_Quote)
+            {
+                i Cpp_Include 'string';
+                return 'std::string';
+            }
+            if (AC is a Token_Number)
+            {
+                if ([AC.Text] contains '.')
+                {
+                    return 'double';
+                }
+                return 'int';
+            }
+            string DT [AC.Data_Type];
+            if (not (DT is an Element))
+            {
+                return (i Cpp_Type DT);
+            }
+        }
+        error 'c++ generator: cannot infer a c++ type for ' (Arg.Get_Input);
+    }
+
+    method string Cpp_Escape [string Text]
+    {
+        if (Text contains '\')
+        {
+            replace Text '\' '\\';
+        }
+        if (Text contains '"')
+        {
+            replace Text '"' '\"';
+        }
+        if (Text contains [tab])
+        {
+            replace Text [tab] '\t';
+        }
+        if (Text contains [line])
+        {
+            replace Text [line] '\n';
+        }
+        return Text;
+    }
+
+    method string Cpp_Quote [string Text]
+    {
+        return (append '"' (i Cpp_Escape Text) '"');
+    }
+
+    method string Cpp_Args [string Separator]
+    {
+        object Arg;
+        string Args_Cpp '';
+        string Between '';
+        for each Arg in [my Listargs]
+        {
+            if (not (defined [Arg.Cpp]))
+            {
+                error 'Argument Cpp not defined: ' [Arg.Gal];
+            }
+            append Args_Cpp Between [Arg.Cpp];
+            = Between Separator;
+        }
+        return Args_Cpp;
+    }
+
+    method string Cpp_Arguments [string Separator]
+    {
+        object Arg;
+        string Args_Cpp '';
+        string Between '';
+        for each Arg in [my Arguments]
+        {
+            if (not (defined [Arg.Cpp]))
+            {
+                error 'Argument Cpp not defined: ' [Arg.Gal];
+            }
+            append Args_Cpp Between [Arg.Cpp];
+            = Between Separator;
+        }
+        return Args_Cpp;
+    }
+
+    method string Cpp_Params
+    {
+        comment `a method or constructor parameter list: the bracket
+        parameters live in Listargs, each already generated as
+        type-space-name`;
+        object Arg;
+        string Code '';
+        string Between '';
+        for each Arg in [my Listargs]
+        {
+            append Code Between [Arg.Cpp];
+            = Between ', ';
+        }
+        return Code;
+    }
+}
+
+class set Statement
+{
+    method string Cpp_Block
+    {
+        forgive
+        {
+            if (not ([my Block Cpp] is null))
+            {
+                return [my Block Cpp];
+            }
+        }
+        return (append ' {' [line] '}');
+    }
+}
+
+class set Operation
+{
+    method string Cpp_Numeric_Operand [object Op]
+    {
+        comment `c++ must convert a string-typed operand explicitly, and
+        std::stoi and std::stod are plain expressions that skip leading
+        whitespace themselves, so the conversion inlines`;
+        string Code [Op.Cpp];
+        if ((i Cpp_Arg_Data_Type Op) s= 'string')
+        {
+            i Cpp_Include 'string';
+            if ([my Usage] s= 'integer')
+            {
+                Code = (append 'std::stoi(' Code ')');
+            }
+            else
+            {
+                Code = (append 'std::stod(' Code ')');
+            }
+        }
+        return Code;
+    }
+
+    method string Cpp_Numeric_Infix [object Op1, object Op2, string Infix]
+    {
+        if ((llength [my Arguments]) > 2)
+        {
+            error 'c++ generator: operation chains longer than two operands are outside the contract';
+        }
+        return (append '(' (i Cpp_Numeric_Operand Op1) Infix (i Cpp_Numeric_Operand Op2) ')');
+    }
+
+    method string Cpp_Infix [object Op1, object Op2, string Infix]
+    {
+        if ((llength [my Arguments]) > 2)
+        {
+            error 'c++ generator: operation chains longer than two operands are outside the contract';
+        }
+        return (append '(' [Op1.Cpp] Infix [Op2.Cpp] ')');
+    }
+}
+
+generator Cpp Fallback
+{
+    english 'generate c++ code for each language element, using the inferred data types.';
+
+    generate Element
+    {
+        i = '';
+    }
+
+    generate Statement
+    {
+        error 'no c++ generator for statement ' [class name];
+    }
+
+    generate Operation
+    {
+        error 'no c++ generator for operation ' [class name];
+    }
+
+    generate Token
+    {
+        i = [my Text];
+    }
+
+    generate Token_Quote
+    {
+        i = (i Cpp_Quote [my Unquoted]);
+    }
+
+    generate Syntax_True
+    {
+        i = 'true';
+    }
+
+    generate Syntax_False
+    {
+        i = 'false';
+    }
+
+    generate Syntax_Line
+    {
+        comment `the c++ expression for an embedded [line], plus the side
+        effect every target's literal generator supplies: Unquoted holds
+        the real character for the concat and comment builders`;
+        if (defined [my Count])
+        {
+            error 'c++ generator: repeated literals are outside the contract';
+        }
+        my Unquoted = [line];
+        i = '"\n"';
+    }
+
+    generate Syntax_Tab
+    {
+        if (defined [my Count])
+        {
+            error 'c++ generator: repeated literals are outside the contract';
+        }
+        my Unquoted = [tab];
+        i = '"\t"';
+    }
+
+    generate Syntax_Indent
+    {
+        if (defined [my Count])
+        {
+            error 'c++ generator: repeated literals are outside the contract';
+        }
+        my Unquoted = '    ';
+        i = '"    "';
+    }
+
+    generate Program
+    {
+        comment `the includes must come first. the statements generate
+        before the header is assembled, so the include and helper
+        registries are complete by then`;
+        string Body '';
+        string Between '';
+        object Stmt;
+        for each Stmt in [my Statements]
+        {
+            undefined [Stmt.Cpp]
+            {
+                Stmt.Infer_Cpp;
+            }
+            string S [Stmt.Cpp];
+            if (S sgt '')
+            {
+                append Body Between S [line];
+                Between = [line];
+            }
+        }
+        string Code '';
+        string Inc;
+        for each Inc in [my Cpp_Includes]
+        {
+            append Code '#include <' Inc '>' [line];
+        }
+        if ((llength [my Cpp_Includes]) > 0)
+        {
+            append Code [line];
+        }
+        string H;
+        for each H in [my Cpp_Helpers]
+        {
+            append Code H [line] [line];
+        }
+        append Code Body;
+        i = Code;
+    }
+
+    generate Block
+    {
+        comment `an else or else if statement merges onto the closing
+        brace of the statement before it, the c++ brace style`;
+        list Parts;
+        object Line;
+        for each Line in [my Statements]
+        {
+            string S [Line.Cpp];
+            continue if (S seq '');
+            if (((length S) >= 4) and ((substring S 0 4) s= 'else') and ((llength Parts) > 0))
+            {
+                string Prev (pop Parts);
+                push Parts (append Prev ' ' S);
+            }
+            else
+            {
+                push Parts S;
+            }
+        }
+        string Statements '';
+        string P;
+        for each P in Parts
+        {
+            append Statements P [line];
+        }
+        my Cpp_Statements = Statements;
+        string Code (append ' {' [line] (i Indent Statements) '}');
+        i = Code;
+    }
+
+    generate Statement_Flowerbox
+    {
+        i = '';
+    }
+
+    generate Statement_Comment
+    {
+        string Text '';
+        object Argument;
+        for each Argument in [my Arguments]
+        {
+            if (Argument is a Token_Quote)
+            {
+                append Text [Argument.Unquoted];
+            }
+            else
+            {
+                string Piece (Argument.Get_Input);
+                forgive
+                {
+                    comment `a bracketed literal like [line] carries its real
+                    character in the classification's Unquoted property`;
+                    object AC [Argument.Classification];
+                    if ((AC is a Literal_Syntax) and (defined [AC.Unquoted]))
+                    {
+                        Piece = [AC.Unquoted];
+                    }
+                }
+                append Text Piece;
+            }
+        }
+        # 'quote openers would poison Element.Indent quote tracking downstream, replace with closing homoglyphs';
+        replace Text "'" '’';
+        replace Text '"' '”';
+        replace Text '`' '’';
+        replace Text '“' '”';
+        replace Text '‘' '’';
+        replace Text '«' '»';
+        replace Text '‹' '›';
+        string Code '';
+        lsplit Lines Text [line];
+        for each Text in Lines
+        {
+            if (Code sgt '')
+            {
+                append Code [line];
+            }
+            append Code '// ' Text;
+        }
+        i = Code;
+    }
+
+    generate Statement_Module
+    {
+        string Code '// module: ' [my Name Cpp] [line];
+        object Stmt;
+        for each Stmt in [my Block Statements]
+        {
+            string S [Stmt.Cpp];
+            if (S sgt '')
+            {
+                append Code S [line];
+            }
+        }
+        i = Code;
+    }
+
+    generate Statement_Main
+    {
+        if ((llength [my Listargs]) > 0)
+        {
+            error 'c++ generator: main with arguments is outside the contract';
+        }
+        string Body '';
+        forgive
+        {
+            Body = [my Block Cpp_Statements];
+        }
+        append Body 'return 0;' [line];
+        string Code 'int main() {' [line]
+            (i Indent Body)
+            '}';
+        i = Code;
+    }
+
+    generate Statement_Integer
+    {
+        string Value '0';
+        forgive
+        {
+            if (not ([my Value] is null))
+            {
+                Value = [my Value Cpp];
+            }
+        }
+        i = (append 'int ' [my Name Cpp] ' = ' Value ';');
+    }
+
+    generate Statement_Number
+    {
+        string Value '0.0';
+        forgive
+        {
+            if (not ([my Value] is null))
+            {
+                Value = [my Value Cpp];
+            }
+        }
+        i = (append 'double ' [my Name Cpp] ' = ' Value ';');
+    }
+
+    generate Statement_Flag
+    {
+        string Value 'false';
+        forgive
+        {
+            if (not ([my Value] is null))
+            {
+                Value = [my Value Cpp];
+            }
+        }
+        i = (append 'bool ' [my Name Cpp] ' = ' Value ';');
+    }
+
+    generate Statement_String
+    {
+        i Cpp_Include 'string';
+        string Value '""';
+        forgive
+        {
+            if ((llength [my Listargs]) > 0)
+            {
+                object V (lget [my Listargs] 0);
+                Value = [V.Cpp];
+            }
+        }
+        i = (append 'std::string ' [my Name Cpp] ' = ' Value ';');
+    }
+
+    generate Statement_Object
+    {
+        comment `objects construct on the stack, in place: the new
+        expression's class name is the type, and its arguments become the
+        constructor call. the new expression itself generated as
+        ClassName(args), so the arguments are everything past the name`;
+        string Value '';
+        string Type '';
+        forgive
+        {
+            if (not ([my Value] is null))
+            {
+                Value = [my Value Cpp];
+                object V [my Value];
+                object VC [V.Classification];
+                if (VC is an Operation_New)
+                {
+                    Type = [VC.Class_Name Cpp];
+                }
+            }
+        }
+        if (Value seq '')
+        {
+            error 'c++ generator: object declaration without a value: ' [my Name Cpp];
+        }
+        if (Type seq '')
+        {
+            error 'c++ generator: an object declaration needs a new expression (objects are stack values in c++): ' [my Name Cpp];
+        }
+        integer TL (length Type);
+        string Ctor_Args (substring Value TL ((length Value) - TL));
+        i = (append Type ' ' [my Name Cpp] Ctor_Args ';');
+    }
+
+    generate Statement_List
+    {
+        if ((llength [my Listargs]) = 0)
+        {
+            error 'c++ generator: an empty list declaration is outside the contract: ' [my Name Cpp];
+        }
+        i Cpp_Include 'vector';
+        string ET (i Cpp_Value_Type (lget [my Listargs] 0));
+        i = (append 'std::vector<' ET '> ' [my Name Cpp] ' = {' (i Cpp_Args ', ') '};');
+    }
+
+    generate Statement_Dictionary
+    {
+        comment `c++ needs the map's value type at the declaration; gal's
+        inference stops at 'dictionary', so the declaration reads it from
+        the first sibling dictionary assignment it can see`;
+        i Cpp_Include 'map';
+        string My_Name [my Name Cpp];
+        string VT '';
+        forgive
+        {
+            comment `Parent is the enclosing scoped statement, and its Block
+            holds the sibling statements`;
+            object P [my Parent];
+            object S;
+            for each S in [P.Block Statements]
+            {
+                continue if (VT sgt '');
+                forgive
+                {
+                    object C [S.Classification];
+                    if (C is a Statement_Dictionary_Assign)
+                    {
+                        object D [C.Dict];
+                        if ((D.Get_Input) s= My_Name)
+                        {
+                            VT = (i Cpp_Value_Type [C.Value]);
+                        }
+                    }
+                }
+            }
+        }
+        if (VT seq '')
+        {
+            error 'c++ generator: cannot infer the value type of dictionary ' My_Name;
+        }
+        i = (append 'std::map<std::string, ' VT '> ' My_Name ';');
+    }
+
+    generate Statement_Dictionary_Assign
+        Dict '[' Subscript '] = ' Value ';';
+
+    generate Operation_Dict_Get
+        Dictionary '[' Key ']';
+
+    generate Statement_Assign
+    {
+        comment `gal objects are reference-typed and c++ stack objects are
+        value-typed: an assignment whose value the inference could not
+        type might be an object alias, which would silently copy, so it
+        is outside the contract`;
+        string VT (i Cpp_Arg_Data_Type [my Value]);
+        if (VT seq '')
+        {
+            error 'c++ generator: assignment of an untyped value is outside the contract (objects are stack values in c++)';
+        }
+        i = (append [my Destination Cpp] ' = ' [my Value Cpp] ';');
+    }
+
+    generate Statement_Say
+    {
+        comment `say is a std::cout << chain: runs of literal arguments
+        merge into one quoted string, and the newline folds into a
+        trailing literal when there is one`;
+        i Cpp_Include 'iostream';
+        string Code '';
+        string Between '';
+        string Plain '';
+        object Arg;
+        for each Arg in [my Arguments]
+        {
+            object AC [Arg.Classification];
+            string U '<none>';
+            forgive
+            {
+                string U2 [AC.Unquoted];
+                if (not (U2 is an Element))
+                {
+                    U = U2;
+                }
+            }
+            if (U sne '<none>')
+            {
+                append Plain U;
+            }
+            else
+            {
+                if (Plain sgt '')
+                {
+                    append Code Between (i Cpp_Quote Plain);
+                    Between = ' << ';
+                    Plain = '';
+                }
+                append Code Between [Arg.Cpp];
+                Between = ' << ';
+            }
+        }
+        append Plain [line];
+        append Code Between (i Cpp_Quote Plain);
+        i = (append 'std::cout << ' Code ';');
+    }
+
+    generate Statement_Append
+    {
+        comment `append is string + concatenation: numeric pieces wrap in
+        std::to_string, so every + has a std::string on at least one side`;
+        i Cpp_Include 'string';
+        string Code '';
+        string Between '';
+        string Plain '';
+        object Arg;
+        for each Arg in [my Listargs]
+        {
+            object AC [Arg.Classification];
+            string U '<none>';
+            forgive
+            {
+                string U2 [AC.Unquoted];
+                if (not (U2 is an Element))
+                {
+                    U = U2;
+                }
+            }
+            if (U sne '<none>')
+            {
+                append Plain U;
+            }
+            else
+            {
+                if (Plain sgt '')
+                {
+                    append Code Between (i Cpp_Quote Plain);
+                    Between = ' + ';
+                    Plain = '';
+                }
+                string Piece [Arg.Cpp];
+                string DT (i Cpp_Arg_Data_Type Arg);
+                if ((DT s= 'integer') or (DT s= 'number'))
+                {
+                    Piece = (append 'std::to_string(' Piece ')');
+                }
+                append Code Between Piece;
+                Between = ' + ';
+            }
+        }
+        if (Plain sgt '')
+        {
+            append Code Between (i Cpp_Quote Plain);
+        }
+        i = (append [my Variable Cpp] ' += ' Code ';');
+    }
+
+    generate Statement_Readline
+    {
+        comment `string literals are prompts, names are input variables:
+        each name reads one line, carrying the prompt gathered since the
+        last read. std::cin is tied to std::cout, so the prompt flushes
+        before the read without any help`;
+        i Cpp_Include 'iostream';
+        i Cpp_Include 'string';
+        string Code '';
+        string Between '';
+        string Prompt '';
+        objects Arg Argc;
+        for each Arg in [my Arguments]
+        {
+            Argc = [Arg.Classification];
+            if (Argc is a Token_Quote)
+            {
+                if (Prompt sgt '')
+                {
+                    append Prompt ' << ';
+                }
+                append Prompt [Arg.Cpp];
+            }
+            else
+            {
+                if (Prompt sgt '')
+                {
+                    append Code Between 'std::cout << ' Prompt ';';
+                    Between = [line];
+                    Prompt = '';
+                }
+                append Code Between 'std::getline(std::cin, ' [Arg.Cpp] ');';
+                Between = [line];
+            }
+        }
+        i = Code;
+    }
+
+    generate Statement_If
+        'if ' Condition (i Cpp_Block);
+
+    generate Statement_Else_If
+        'else if ' Condition (i Cpp_Block);
+
+    generate Statement_Else
+        'else' (i Cpp_Block);
+
+    generate Statement_For_Range
+    {
+        string V [my Variable Cpp];
+        string Code 'for (int ' V ' = ' [my Start Cpp] '; ' V ' <= ' [my End Cpp] '; ';
+        if (defined [my Increment])
+        {
+            append Code V ' += ' [my Increment Cpp];
+        }
+        else
+        {
+            append Code V '++';
+        }
+        append Code ')' (i Cpp_Block);
+        i = Code;
+    }
+
+    generate Statement_For_Each
+        'for (const auto& ' Item ' : ' List ')' (i Cpp_Block);
+
+    generate Statement_For_Each_In
+        'for (const auto& ' Item ' : ' List ')' (i Cpp_Block);
+
+    generate Statement_Class
+    {
+        comment `a gal class becomes a plain c++ class with one public:
+        section: properties are fields carrying their defaults as
+        in-class member initializers, the constructor keeps the class
+        name, and methods translate one to one. the universal Base of a
+        standalone program vanishes`;
+        string Fields '';
+        string Constructor '';
+        string Methods '';
+        flag Has_Body [false];
+        forgive
+        {
+            objects S C;
+            for each S in [my Block Statements]
+            {
+                Has_Body = [true];
+                C = [S.Classification];
+                if (C is a Statement_Constructor)
+                {
+                    Constructor = [S.Cpp];
+                }
+                else if (C is a Statement_Property)
+                {
+                    append Fields [indent] [S.Cpp] [line];
+                }
+                else if (C is a Statement_Method)
+                {
+                    append Methods [line] (i Indent [S.Cpp]) [line];
+                }
+                else if (C is a Statement_Comment)
+                {
+                    append Methods [line] (i Indent [S.Cpp]) [line];
+                }
+                else
+                {
+                    error 'c++ generator: statement outside the class contract in class ' [my Class_Name Cpp];
+                }
+            }
+        }
+        if (not Has_Body)
+        {
+            i = '';
+        }
+        else
+        {
+            string CN [my Class_Name Cpp];
+            string Code 'class ' CN ' {' [line] 'public:' [line] Fields;
+            if (Constructor sgt '')
+            {
+                append Code [line] (i Indent Constructor) [line];
+            }
+            append Code Methods '};';
+            i = Code;
+        }
+    }
+
+    generate Property_Statement
+    {
+        string CT (i Cpp_Type [my Type Cpp]);
+        string V '';
+        forgive
+        {
+            if (not ([my Value] is null))
+            {
+                V = [my Value Cpp];
+            }
+        }
+        if (V seq '')
+        {
+            V = 'false';
+            if (CT s= 'int')
+            {
+                V = '0';
+            }
+            else if (CT s= 'double')
+            {
+                V = '0.0';
+            }
+            else if (CT s= 'std::string')
+            {
+                V = '""';
+            }
+        }
+        i = (append CT ' ' [my Name Cpp] ' = ' V ';');
+    }
+
+    generate Statement_Constructor
+    {
+        object Cls = (i Get_Owner_Class);
+        string CN [Cls.Class_Name Cpp];
+        string Code (append CN '(' (i Cpp_Params) ')');
+        append Code (i Cpp_Block);
+        i = Code;
+    }
+
+    generate Statement_Method
+    {
+        string RT 'void';
+        forgive
+        {
+            string T2 [my Data_Type Cpp];
+            if (not (T2 is an Element))
+            {
+                if ((T2 sgt '') and (T2 sne 'void'))
+                {
+                    RT = (i Cpp_Type T2);
+                }
+            }
+        }
+        string Code (append RT ' ' [my Name Cpp] '(' (i Cpp_Params) ')');
+        append Code (i Cpp_Block);
+        i = Code;
+    }
+
+    generate Argument_Syntax
+    {
+        if (defined [my Default_Value])
+        {
+            error 'c++ generator: argument default values are outside the contract';
+        }
+        string T '';
+        forgive
+        {
+            string T2 [my Data_Type];
+            if (not (T2 is an Element))
+            {
+                T = T2;
+            }
+        }
+        if (T seq '')
+        {
+            error 'c++ generator: untyped argument ' [my Variable Cpp]
+                ' (objects are stack values in c++, passing them is outside the contract)';
+        }
+        i = (append (i Cpp_Type T) ' ' [my Variable Cpp]);
+    }
+
+    generate Syntax_My
+        'this->' (i Cpp_Arguments '.');
+
+    generate Statement_My_Equal
+        'this->' Property_Name ' = ' Value ';';
+
+    generate Statement_Call
+        Object '.' Method '(' (i Cpp_Args ', ') ');';
+
+    generate Operation_New
+        Class_Name '(' (i Cpp_Args ', ') ')';
+
+    generate Statement_Return
+    {
+        string Code 'return';
+        forgive
+        {
+            if (defined [my Value])
+            {
+                append Code ' ' [my Value Cpp];
+            }
+        }
+        append Code ';';
+        i = Code;
+    }
+
+    generate Operation_Add
+        (i Cpp_Numeric_Infix [my Op1] [my Op2] ' + ');
+    generate Operation_Minus
+        (i Cpp_Numeric_Infix [my Op1] [my Op2] ' - ');
+    generate Operation_Multiply
+        (i Cpp_Numeric_Infix [my Op1] [my Op2] ' * ');
+    generate Operation_Divide
+        (i Cpp_Numeric_Infix [my Op1] [my Op2] ' / ');
+    generate Operation_Modulo
+        (i Cpp_Numeric_Infix [my Op1] [my Op2] ' % ');
+    generate Operation_Greater
+        (i Cpp_Infix [my Op1] [my Op2] ' > ');
+    generate Operation_Less
+        (i Cpp_Infix [my Op1] [my Op2] ' < ');
+    generate Operation_Greater_Equal
+        (i Cpp_Infix [my Op1] [my Op2] ' >= ');
+    generate Operation_Less_Equal
+        (i Cpp_Infix [my Op1] [my Op2] ' <= ');
+    generate Operation_Equal
+        (i Cpp_Infix [my Op1] [my Op2] ' == ');
+    generate Operation_Not_Equal
+        (i Cpp_Infix [my Op1] [my Op2] ' != ');
+    generate Operation_And
+        (i Cpp_Infix [my Op1] [my Op2] ' && ');
+    generate Operation_Or
+        (i Cpp_Infix [my Op1] [my Op2] ' || ');
+    generate Operation_Not
+        '(!' [my Op1 Cpp] ')';
+}
+
+class Cpp_Compiler is Fallback_Compiler
+{
+    constructor
+    {
+        my Generator = (new Cpp_Generator [self]);
+    }
+    method void Print_Errors
+    {
+        object E;
+        for each E in [my Elements]
+        {
+            if (not ([E.Error] is null))
+            {
+                say [line]
+                    [class name [E.Classification]]
+                    ': '
+                    (substring (E.Get_Input) 0 80);
+                say 'ERROR: ' [E.Error];
+            }
+        }
+    }
+    method number Infer_Code
+    {
+        verbosity;
+        [my Generator Elements] = [my Elements];
+        number Status = ([my Generator].Infer_Gal);
+        if (not Status)
+        {
+            i Print_Errors;
+            say 'Error in Cpp inference, inferring gal';
+            return 0;
+        }
+        Status = ([my Generator].Infer_Fallback);
+        if (not Status)
+        {
+            i Print_Errors;
+            say 'Error in Cpp inference, inferring fallback';
+            return 0;
+        }
+        Status = ([my Generator].Infer_Cpp);
+        if (not Status)
+        {
+            comment `a subset backend fails loudly: a generator error on any
+            element must fail the compile, not leak None into the output`;
+            i Print_Errors;
+            say 'Error in Cpp inference, inferring c++';
+            return 0;
+        }
+        object Top = (llast [my Elements]);
+        try
+        {
+            if ([Top.Cpp] is null)
+            {
+                Top.Infer_Cpp;
+            }
+        }
+        catch Error
+        {
+            say 'Error in Cpp inference: ' Error;
+            return 0;
+        }
+        my Cpp = [Top.Cpp];
+        return 1;
+    }
+}

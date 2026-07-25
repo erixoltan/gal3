@@ -1,0 +1,2560 @@
+class Base
+{
+    constructor [variant A [null], variant B [null], variant C [null]];
+}
+class Global
+{
+    class property dictionary Class_Names;
+}
+
+class Symbol
+{
+    property object Owner;
+}
+symbol flag Flag;
+symbol integer Integer;
+symbol number Number;
+symbol string String;
+symbol integer Date;
+symbol list List;
+symbol dictionary Dictionary;
+symbol object Entity;
+symbol variant Variant;
+
+symbol variant Feature;
+class Thing is Entity;
+
+class Element
+{
+    property object Document;
+    property integer Start_Position;
+    property integer End_Position;
+    property object Classification [self];
+    property object Parent [null];
+    property object Variable_Context [null];
+    property string Error '';
+    method string To_String
+    {
+        string Text
+            [class name]
+            ' '
+            [my Start_Position]
+            '-'
+            [my End_Position];
+        forgive
+        {
+            append Text ' gal ' [my Gal];
+        }
+        forgive
+        {
+            append Text ' fallback ' [my Fallback];
+        }
+        forgive
+        {
+            append Text ' python ' [my Python];
+        }
+        forgive
+        {
+            object Elem;
+            for each Elem in [my Elements]
+            {
+                append Text (i Indent (Elem.To_String)) [line];
+            }
+
+        }
+        return Text;
+    }
+    method string Get_Input
+    {
+        integer Length (([my End_Position] - [my Start_Position]) + 1);
+        string Input (substring [my Document Text] [my Start_Position] Length);
+        return Input;
+    }
+    method string Indent [string Text]
+    {
+        return '' if (isnull Text);
+        string Qchars '"' "'" "`" '“' '‘' '«' '‹';
+        dictionary Qend;
+        Qend '"' d= '"';
+        Qend "'" d= "'";
+        Qend '`' d= '`';
+        Qend '“' d= '”';
+        Qend '‘' d= '’';
+        Qend '«' d= '»';
+        Qend '‹' d= '›';
+        integer P;
+        string C;
+        string I '';
+        flag Quote [false];
+        string Q '';
+        string Between '';
+        integer E = ((length Text) - 1);
+        if (not (Qchars contains (substring Text 0 1)))
+        {
+            Between = [indent];
+        }
+        for P range 0 E
+        {
+            C = (substring Text P 1);
+            append I Between C;
+            Between = '';
+            if Quote
+            {
+                if (C s= Q)
+                {
+                    Quote = [false];
+                    Q = '';
+                }
+            }
+            else if (C = [line])
+            {
+                Between = [indent];
+            }
+            else if (contains Qchars C)
+            {
+                Quote = [true];
+                Q = (dget Qend C);
+            }
+        }
+        return I;
+    }
+    method string Enquote [string Text]
+    {
+        return (append "'" Text "'")
+            if (not (contains Text "'"));
+        return  (append '"' Text '"')
+            if (not (contains Text '"'));
+        return (append "`" Text "`")
+            if (not (contains Text "`"));
+        return (append '“' Text '”')
+            if ((not (contains Text '“')) and (not (contains Text '”')));
+        return (append '‘' Text '’')
+            if ((not (contains Text '‘')) and (not (contains Text '’')));
+        return (append '«' Text '»')
+            if ((not (contains Text '«')) and (not (contains Text '»')));
+        return (append '‹' Text '›')
+            if ((not (contains Text '‹')) and (not (contains Text '›')));
+        return "'ERROR goalspell compiler DEEPLY ENQUOTED STRING FAILED HERE'";
+    }
+    method number Infer_Appends
+    {
+        return 1;
+    }
+    method object Get_Module
+    {
+        forgive
+        {
+            return ([my Parent].Get_Module);
+        }
+        return [null];
+    }
+    method object Get_Variable_Context
+    {
+        comment `the enclosing element that owns variable definitions: an
+        element does not know, so it asks its parent; elements that act as
+        a variable context, such as methods, return themselves. a parse
+        element consults its classification on the way up, because that is
+        where the context behavior lives. the answer is cached on the
+        element: every consumer runs after structure inference, when the
+        parent chain no longer changes, and type inference asks often
+        enough that the repeated walk dominates compile time.`;
+        object Cached [my Variable_Context];
+        return Cached if (not (Cached is null));
+        forgive
+        {
+            object C [my Classification];
+            if (not (C = [self]))
+            {
+                object Ctx (C.Get_Variable_Context);
+                if (not (Ctx is null))
+                {
+                    my Variable_Context = Ctx;
+                    return Ctx;
+                }
+            }
+        }
+        forgive
+        {
+            object P [my Parent];
+            object Up (P.Get_Variable_Context);
+            if (not (Up is null))
+            {
+                my Variable_Context = Up;
+            }
+            return Up;
+        }
+        return [null];
+    }
+    method string Lookup_Variable [string Name]
+    {
+        comment `resolve a variable name to its declared data type through
+        the context chain; empty when nothing declares it. a context whose
+        context is itself has no variable table on this path: answering
+        empty here stops a self-recursion that would otherwise spiral to
+        the recursion limit and be silently forgiven.`;
+        forgive
+        {
+            object Ctx (i Get_Variable_Context);
+            return '' if (Ctx is null);
+            return '' if (Ctx = [self]);
+            return (Ctx.Lookup_Variable Name);
+        }
+        return '';
+    }
+    method string Type_From_Word [string W]
+    {
+        comment `translate a declaration or parameter keyword to the
+        canonical type name it declares`;
+        string K ' flag integer number string list dictionary object variant ';
+        return W if (contains K (append ' ' W ' '));
+        return 'dictionary' if (W s= 'dict');
+        return 'variant' if (W s= 'var');
+        return 'list' if (W s= 'global');
+        return 'flag' if (W s= 'flags');
+        return 'integer' if (W s= 'integers');
+        return 'number' if (W s= 'numbers');
+        return 'string' if (W s= 'strings');
+        return 'object' if (W s= 'objects');
+        return 'variant' if (W s= 'variants');
+        return 'variant' if (W s= 'vars');
+        return 'list' if (W s= 'lists');
+        return '';
+    }
+    method void Register_Variables;
+    method object Get_Owner_Class
+    {
+        if ([my Classification] is a Class_Statement)
+        {
+            return [my Classification];
+        }
+        forgive
+        {
+            return ([my Parent].Get_Owner_Class);
+        }
+        return [null];
+    }
+    method object Get_Owner_Constructor
+    {
+        if ([my Classification] is a Statement_Constructor)
+        {
+            return [my Classification];
+        }
+        forgive
+        {
+            return ([my Parent].Get_Owner_Constructor);
+        }
+        return [null];
+    }
+}
+
+class Character is Element
+{
+    property string Text;
+    property integer Position;
+    property object Next [null];
+    property object Prev [null];
+    class method object Factory [object O, integer P, string C]
+    {
+        todo "find out if it causes any problem to reference these before they are defined in the file.";
+        object Char;
+        string Q '"`“”‘’';
+        append Q "'«»‹›";
+        if (Q contains C)
+        {
+            Char = (new Char_Quote);
+        }
+        else if ('0123456789' contains C)
+        {
+            Char = (new Char_Number);
+        }
+        else if (C s= ',')
+        {
+            Char = (new Char_Comma);
+        }
+        else if (C is ident)
+        {
+            if (C is uppercase)
+            {
+                Char = (new Char_Upper);
+            }
+            else if (C is lowercase)
+            {
+                Char = (new Char_Lower);
+            }
+            else
+            {
+                Char = (new Char_Ident);
+            }
+        }
+        else if (C is whitespace)
+        {
+            if (C s= [line])
+            {
+                Char = (new Char_Line);
+            }
+            else if (C s= [tab])
+            {
+                Char = (new Char_Tab);
+            }
+            else
+            {
+                Char = (new Char_Ws);
+            }
+        }
+        else if (C s= ',')
+        {
+            Char = (new Char_Comma);
+        }
+        else if (C is punctuation)
+        {
+            Char = (new Char_Punct);
+        }
+        else
+        {
+                Char = (new Character);
+        }
+        Char.Text = C;
+        Char.Start_Position = P;
+        Char.End_Position = P;
+        Char.Owner = O;
+        return Char;
+    }
+}
+
+class Char_Ident is Character;
+class Char_Upper is Char_Ident;
+class Char_Lower is Char_Ident;
+class Char_Number is Character;
+class Char_Punct is Character;
+class Char_Quote is Character;
+class Char_Ws is Character;
+class Char_Line is Char_Ws;
+class Char_Tab is Char_Ws;
+class Char_Comma is Char_Punct;
+
+class Token is Element
+{
+    property list Elements;
+    class method object Factory [object Char]
+    {
+        object Tok;
+        object Next = [Char.Next];
+        string C [Char.Text];
+        if (Char is a Char_Quote)
+        {
+            string Q '"`“”‘’';
+            append Q "'«»‹›";
+            Tok = (new Token_Quote);
+            Tok.Open_Quote = C;
+            if (C s= '-')
+            {
+                debug;
+            }
+            if (C s= '“')
+            {
+                Tok.Close_Quote = '”';
+            }
+            else if (C s= '‘')
+            {
+                Tok.Close_Quote = '’';
+            }
+            else if (C s= '«')
+            {
+                Tok.Close_Quote = '»';
+            }
+            else if (C s= '‹')
+            {
+                Tok.Close_Quote = '›';
+            }
+            else
+            {
+                Tok.Close_Quote = C;
+            }
+        }
+        else if (Char is a Char_Number)
+        {
+            Tok = (new Token_Number);
+        }
+        else if (('-.' contains C) and (Next is a Char_Number))
+        {
+            Tok = (new Token_Number);
+        }
+        else if (Char is a Char_Ident)
+        {
+            Tok = (new Token_Word);
+        }
+        else if (Char is a Char_Comma)
+        {
+            Tok = (new Token_Comma);
+        }
+        else if (Char is a Char_Punct)
+        {
+            if ("{}[]();," contains [Char.Text])
+            {
+                Tok = (new Token_Boundary);
+            }
+            else if ([Char.Text] s= '-')
+            {
+                Tok = (new Token_Word);
+            }
+            else
+            {
+                Tok = (new Token_Keyword);
+            }
+        }
+        else if (Char is a Char_Line)
+        {
+            Tok = (new Token_Line);
+        }
+        else if (Char is a Char_Ws)
+        {
+            Tok = (new Token_Ws);
+        }
+        Tok.Text = C;
+        Tok.Start_Position = [Char.Start_Position];
+        Tok.End_Position = [Char.End_Position];
+        return Tok;
+    }
+    method integer Append_Character [object Char]
+    {
+        comment 'by default, a token cannot append new characters';
+        return 0;
+    }
+    method string To_String
+    {
+        string Text
+            [class name]
+            ' '
+            [my Start_Position]
+            '-'
+            [my End_Position]
+            ' text '
+            [my Text];
+        forgive
+        {
+            append Text (s+ ' gal ' [my Gal]);
+        }
+        forgive
+        {
+            append Text (s+ ' fallback ' [my Fallback]);
+        }
+        forgive
+        {
+            append Text (s+ ' python ' [my Python]);
+        }
+        return Text;
+    }
+    method number Infer_Components
+    {
+        return 1;
+    }
+    method string Get_Input
+    {
+        return [my Text];
+    }
+    
+    method number Infer_Gal
+    {
+        my Gal = [my Text];
+        return 1;
+    }
+}
+class Token_Word is Token
+{
+    method integer Append_Character [object Char]
+    {
+        if ((Char is a Char_Ident) or (Char is a Char_Number))
+        {
+            push [my Elements] Char;
+            append [my Text] [Char.Text];
+            my End_Position = [Char.End_Position];
+            return 1;
+        }
+        return 0;
+    }
+}
+class Token_Number is Token
+{
+    method integer Append_Character [object Char]
+    {
+        if (Char is a Char_Number)
+        {
+            push [my Elements] Char;
+            append [my Text] [Char.Text];
+            my End_Position = [Char.End_Position];
+            return 1;
+        }
+        if ([Char.Text] s= '.')
+        {
+            return 0 if ([my Text] contains '.');
+            return 0 if ([Char.Next] is not a Char_Number);
+            push [my Elements] Char;
+            append [my Text] [Char.Text];
+            my End_Position = [Char.End_Position];
+            return 1;
+        }
+        return 0;
+    }
+}
+class Token_Boundary is Token;
+class Token_Comma is Token_Boundary;
+class Token_Punct is Token;
+class Token_Keyword is Token_Punct;
+class Token_Ws is Token
+{
+    method integer Append_Character [object Char]
+    {
+        return 0 if (not (Char is a Char_Ws));
+        return 0 if (Char is a Char_Line);
+        push [my Elements] Char;
+        append [my Text] [Char.Text];
+        my End_Position = [Char.End_Position];
+        return 1;
+    }
+}
+class Token_Line is Token_Ws
+{
+    method integer Append_Character [object Char]
+    {
+        return 0;
+    }
+}
+class Token_Tab is Token_Ws
+{
+    method integer Append_Character [object Char]
+    {
+        return 0;
+    }
+}
+class Token_Spaces is Token_Ws
+{
+    method integer Append_Character [object Char]
+    {
+        return 0;
+    }
+}
+
+class Token_Quote is Token
+{
+    property flag Open [true];
+    property string Open_Quote;
+    property string Close_Quote;
+    property string Unquoted '';
+    property string Data_Type 'string';
+    method integer Append_Character [object Char]
+    {
+        return 0 if (not [my Open]);
+
+        push [my Elements] Char;
+        append [my Text] [Char.Text];
+        my End_Position = [Char.End_Position];
+
+        if ([Char.Text] s= [my Close_Quote])
+        {
+            my Open = [false];
+        }
+        else
+        {
+            [my Unquoted] s+ [Char.Text];
+        }
+        return 1;
+    }
+}
+
+class Program is Element
+{
+    property list Statements;
+    method string To_String
+    {
+        object Elem;
+        string Text
+            [class name]
+            ' '
+            [my Start_Position]
+            '-'
+            [my End_Position] [line] '{' [line];
+        forgive
+        {
+            append Text (s+ [indent] 'gal ' [my Gal] [line]);
+        }
+        forgive
+        {
+            append Text (s+ [indent] 'fallback ' [my Fallback] [line]);
+        }
+        forgive
+        {
+            append Text (s+ [indent] 'python ' [my Python] [line]);
+        }
+        for each Elem in [my Elements]
+        {
+            append Text (i Indent (Elem.To_String)) [line];
+        }
+        append Text '}';
+        return Text;
+    }
+    method number Infer_Components
+    {
+        my Statements = [my Elements];
+        return 1;
+    }
+    
+    method number Infer_Gal
+    {
+        string Code '';
+        object Stmt;
+        for each Stmt in [my Statements]
+        {
+            try
+            {
+                if ([Stmt.Gal] is null)
+                {
+                    Stmt.Infer_Gal;
+                }
+            }
+            catch
+            {
+                debug;
+                Stmt.Infer_Gal;
+            }
+            
+            append Code [Stmt.Gal] [line];
+        }
+        my Gal = Code;
+        return 1;
+    }
+}
+
+class Spell is Element
+{
+    property list Elements;
+    property string Keyword;
+    property list Keywords;
+    property list Key_Words;
+    property list Words;
+    property list Arguments;
+    property list Listargs;
+    property object Dialect;
+    method string To_String
+    {
+        object Elem;
+        string Text '('
+            [class name]
+            ' '
+            [my Start_Position]
+            '-'
+            [my End_Position];
+        if (defined [my Classification])
+        {
+            append Text ' is ' [class name [my Classification]];
+        }
+        append Text [line];
+        forgive
+        {
+            append Text (i Indent ('gal ' s+ [my Gal])) [line];
+        }
+        forgive
+        {
+            append Text (i Indent ('fallback ' s+ [my Fallback])) [line];
+        }
+        forgive
+        {
+            append Text (i Indent ('python ' s+ [my Python])) [line];
+        }
+        append Text [indent] 'elements' [line];
+        for each Elem in [my Elements]
+        {
+            append Text (i Indent (Elem.To_String)) [line] ;
+        }
+        append Text ')';
+        return Text;
+    }
+    method object Create [object Elem]
+    {
+        object Obj = (new [my class]);
+        Obj.Document = [Elem.Document];
+        Obj.Start_Position = [Elem.Start_Position];
+        Obj.End_Position = [Elem.End_Position];
+        Obj.Keywords = [Elem.Keywords];
+        Obj.Key_Words = [Elem.Key_Words];
+        Obj.Verb = [Elem.Verb];
+        return Obj;
+    }
+    method void Classify_As [object C]
+    {
+        my Classification = C;
+        objects E EC;
+        for each E in [my Elements]
+        {
+            push [C.Elements] [E.Classification];
+        }
+        for each E in [my Arguments]
+        {
+            push [C.Arguments] [E.Classification];
+        }
+        for each E in [my Listargs]
+        {
+            push [C.Listargs] [E.Classification];
+        }
+    }
+}
+
+class Block is Element
+{
+    property list Statements;
+    method string To_String
+    {
+        string Text
+            [class name]
+            ' '
+            [my Start_Position]
+            '-'
+            [my End_Position] [line];
+        forgive
+        {
+            append Text (i Indent (s+ 'gal ' [my Gal] [line]));
+        }
+        forgive
+        {
+            append Text (i Indent (s+ 'fallback ' [my Fallback] [line]));
+        }
+        forgive
+        {
+            append Text (i Indent (s+ 'python ' [my Python] [line]));
+        }
+        forgive
+        {
+            object Elem;
+            for each Elem in [my Elements]
+            {
+                append Text (i Indent (. Elem To_String)) [line];
+            }
+
+        }
+        return Text;
+    }
+    method number Infer_Components
+    {
+        object Elem;
+        for each Elem in [my Elements]
+        {
+            continue if ((Elem is a Token_Punct) and ('{}' contains [Elem.Text]));
+            if (Elem is a Statement)
+            {
+                push [my Statements] Elem;
+            }
+        }
+        return 1;
+    }
+}
+
+class Line is Spell
+{
+    method number Infer_Components
+    {
+        list Args copy of [my Elements];
+        my Arguments = Args;
+        list Largs copy of Args;
+        my Listargs = Largs;
+        return 1;
+    }
+}
+
+class Statement is Spell
+{
+    property object Block;
+    method string Get_Language_Name
+    {
+        return [null] if (not (defined [my Parent]));
+        return ([my Parent Classification].Get_Language_Name);
+    }
+    method string Get_Property_Name
+    {
+        debug if (not (defined [my Parent]));
+        return ([my Parent Classification].Get_Property_Name);
+    }
+    method number Infer_Components
+    {
+        list Args copy of [my Elements];
+        object Last = (pop Args);
+        if (Last is a Block)
+        {
+            my Block = Last;
+        }
+        else
+        {
+            object B = (new Block);
+            B.Start_Position = [Last.Start_Position];
+            B.End_Position = [Last.End_Position];
+            my Block = B;
+        }
+        my Arguments = Args;
+        list Largs copy of Args;
+        my Listargs = Largs;
+        return 1;
+    }
+    method void Classify_As [object C]
+    {
+        my Classification = C;
+        objects E EC;
+        for each E in [my Elements]
+        {
+            push [C.Elements] [E.Classification];
+        }
+        for each E in [my Arguments]
+        {
+            push [C.Arguments] [E.Classification];
+        }
+        for each E in [my Listargs]
+        {
+            push [C.Listargs] [E.Classification];
+        }
+        C.Block = (new Block);
+        for each E in [my Block Statements]
+        {
+            push [C.Block.Statements] [E.Classification];
+        }
+        [my Block Classification] = [C.Block];
+    }
+}
+class Statement_Tail is Spell
+{
+    method number Infer_Components
+    {
+        object Elem;
+        for each Elem in [my Elements]
+        {
+            continue if (Elem is a Token_Boundary);
+            push [my Arguments] Elem;
+            push [my Listargs] Elem;
+        }
+        return 1;
+    }
+}
+
+class Operation is Spell
+{
+    method number Infer_Components
+    {
+        object Elem;
+        for each Elem in [my Elements]
+        {
+            continue if (Elem is a Token_Boundary);
+            push [my Arguments] Elem;
+            push [my Listargs] Elem;
+        }
+        return 1;
+    }
+}
+
+class Unary_Operation is Operation;
+class Binary_Operation is Operation;
+class Append_Args_Operation is Operation;
+class Repeating_Operation is Operation;
+
+class Syntax is Spell
+{
+    method number Infer_Components
+    {
+        object Elem;
+        for each Elem in [my Elements]
+        {
+            continue if (Elem is a Token_Boundary);
+            push [my Arguments] Elem;
+            push [my Listargs] Elem;
+        }
+        return 1;
+    }
+    method string To_String
+    {
+        object Elem;
+        string Text '['
+            [class name]
+            ' '
+            [my Start_Position]
+            '-'
+            [my End_Position];
+        if (defined [my Classification])
+        {
+            append Text ' is ' [class name [my Classification]];
+        }
+        append Text [line];
+        forgive
+        {
+            append Text (i Indent ('gal ' s+ [my Gal])) [line];
+        }
+        forgive
+        {
+            append Text (i Indent ('fallback ' s+ [my Fallback])) [line];
+        }
+        forgive
+        {
+            append Text (i Indent ('python ' s+ [my Python])) [line];
+        }
+        append Text [indent] 'elements' [line];
+        for each Elem in [my Elements]
+        {
+            append Text (i Indent (Elem.To_String)) [line] ;
+        }
+        append Text ']';
+        return Text;
+    }
+}
+class Syntax_Tail is Syntax;
+
+class Literal_Syntax is Syntax
+{
+    property string Unquoted;
+}
+
+class Argument_Syntax is Syntax;
+
+class Dialect
+{
+    property dictionary Keywords;
+    property list Elements;
+    property dictionary Statements;
+    property dictionary Operations;
+    property dictionary Syntaxes;
+    property dictionary Unclassified_Verbs;
+
+    method number Add_Keywords [string Text]
+    {
+        if (Text contains ' ')
+        {
+            string Word;
+            list Words copy (split Text ' ');
+            for each Word in Words
+            {
+                [my Keywords] Word d= [true];
+            }
+        }
+        else
+        {
+            [my Keywords] Text d= [true];
+        }
+    }
+
+    method number Choose_Class [dictionary D, object Elem, list Args, list Largs]
+    {
+        verbosity [true];
+        Elem.Arguments = Args;
+        Elem.Listargs = Largs;
+        string V '';
+        string Verb '';
+        string Arg;
+        list Before;
+        list This;
+        string Bef;
+        integer Blen;
+        integer Deepest 0;
+        dictionary Candidates;
+        todo 'this is not perfect';
+        for each Arg in [Elem.Key_Words]
+        {
+            lclear This;
+            for each Bef in Before
+            {
+                V = (append Bef ' ' Arg);
+                Blen = ((dget Candidates Bef) + 1);
+                Candidates V d= Blen;
+                push This V;
+            }
+            push Before Arg;
+            Candidates Arg d= 1;
+            for each V in This
+            {
+                push Before V;
+            }
+        }
+        iterate Candidates Arg Blen
+        {
+            if ((D dexists Arg) and (Blen > Deepest))
+            {
+                Verb = Arg;
+                Deepest = Blen;
+            }
+        }
+        if (Verb s= '')
+        {
+            Verb = ([Elem.Key_Words] join ' ');
+        }
+        Elem.Verb = Verb;
+        comment 'verb identified, remove from arguments list';
+        split Kw Verb ' ';
+        list Arglst;
+        object A;
+        object Ignore;
+        for each A in Args
+        {
+            if (A is a Token)
+            {
+                Arg = [A.Text];
+                if ((llength Kw) > 0)
+                {
+                    if (Arg s= (lget Kw 0))
+                    {
+                        Ignore = (shift Kw);
+                        continue;
+                    }
+                }
+            }
+            push Arglst A;
+        }
+        Elem.Arguments = Arglst;
+        list La copy Arglst;
+        Elem.Listargs = La;
+        if (D dexists Verb)
+        {
+            object C = (D dget Verb);
+            C = (C.Create Elem);
+            debug if (C = Elem);
+            Elem.Classify_As C;
+            comment `verbose 'classified ' [class C name] ": " Verb;`;
+        }
+        else
+        {
+            debug;
+            verbose 'UN classified ' [class Elem name] ": verb " Verb;
+            verbose (Elem.Get_Input);
+            
+            comment Track unclassified verbs to help with debugging and development;
+            if ([my Unclassified_Verbs] dexists Verb)
+            {
+                integer Count = ([my Unclassified_Verbs] dget Verb);
+                [my Unclassified_Verbs] Verb d= (Count + 1);
+            }
+            else
+            {
+                [my Unclassified_Verbs] Verb d= 1;
+            }
+            Elem.Classification = Elem;
+        }
+    }
+    
+    method string Print_Unclassified_Verbs
+    {
+        if (not (defined [my Unclassified_Verbs]))
+        {
+            return '';
+        }
+        flag Issues [false];
+        string Report '';
+        append Report "=== UNCLASSIFIED VERBS ===" [line];
+        object K;
+        integer Count;
+        iterate [my Unclassified_Verbs] K Count
+        {
+            append Report "Verb: '" K "' (count: " (string Count) ")" [line];
+            Issues = [true];
+        }
+        append Report "==========================" [line];
+        return Report if Issues;
+        return '';
+    }
+
+    method number Classify [object Elem]
+    {
+        verbosity;
+        comment 'classify this element and its children';
+        objects D E;
+        if (Elem is a Spell)
+        {
+            string T;
+            list Args copy [Elem.Arguments];
+            list Largs copy Args;
+            for each E in [Elem.Arguments]
+            {
+                if (E is a Token)
+                {
+                    T = [E.Text];
+                    if ([my Keywords] dexists T)
+                    {
+                        push [Elem.Keywords] E;
+                        push [Elem.Key_Words] T;
+                        continue;
+                    }
+                    else if (E is a Token_Word)
+                    {
+                        push [Elem.Words] T;
+                    }
+                    else if (E is a Token_Keyword)
+                    {
+                        push [Elem.Keywords] E;
+                        push [Elem.Key_Words] T;
+                    }
+                }
+            }
+            if (((llength [Elem.Key_Words]) = 0)
+                and ((llength [Elem.Words]) = 0))
+            {
+                debug;
+                return 0;
+            }
+            if (Elem is a Statement)
+            {
+                i Choose_Class [my Statements] Elem Args Largs;
+            }
+            else if (Elem is an Operation)
+            {
+                i Choose_Class [my Operations] Elem Args Largs;
+            }
+            else if (Elem is a Syntax)
+            {
+                i Choose_Class [my Syntaxes] Elem Args Largs;
+            }
+            else if (Elem is a Line)
+            {
+                i Choose_Class [my Statements] Elem Args Largs;
+            }
+            else
+            {
+                Elem.Classification = Elem;
+                verbose 'SELF classified ' [class Elem name];
+            }
+        }
+        return 1;
+    }
+}
+
+class Line_Statement is Statement;
+
+class Scoped_Statement is Statement
+{
+}
+
+class Comment_Statement is Line_Statement;
+
+class Append_Args_Statement is Line_Statement;
+
+class Declaration_Statement is Line_Statement
+{
+    method string Declared_Type
+    {
+        comment `the declaration verb names the type: integer X declares
+        an integer. aliases such as dict translate to the canonical name,
+        and forms like number = keep only the first word.`;
+        string V [my Verb];
+        string W '';
+        integer P 0;
+        integer L (length V);
+        forever
+        {
+            break if (P >= L);
+            string C (substring V P 1);
+            break if (C s= ' ');
+            append W C;
+            increment P;
+        }
+        return (i Type_From_Word W);
+    }
+    method void Register_Variables
+    {
+        forgive
+        {
+            object Ctx (i Get_Variable_Context);
+            return if (Ctx is null);
+            string T (i Declared_Type);
+            return if (T s= '');
+            object N [my Name];
+            string Nm (N.Get_Input);
+            [Ctx.Variables] Nm d= T;
+        }
+    }
+}
+class Declarations_Statement is Line_Statement
+{
+    method void Register_Variables
+    {
+        comment 'the plural form declares every listed name';
+        forgive
+        {
+            object Ctx (i Get_Variable_Context);
+            return if (Ctx is null);
+            string V [my Verb];
+            string T (i Type_From_Word V);
+            return if (T s= '');
+            object N;
+            for each N in [my Listargs]
+            {
+                forgive
+                {
+                    string Nm (N.Get_Input);
+                    [Ctx.Variables] Nm d= T;
+                }
+            }
+        }
+    }
+}
+class Property_Statement is Declaration_Statement
+{
+    method void Register_Variables
+    {
+        comment `a property belongs to its owner class, not to a method
+        scope; my references resolve against the class`;
+        forgive
+        {
+            object Cls (i Get_Owner_Class);
+            return if (Cls is null);
+            object T [my Type];
+            string TW (i Type_From_Word (T.Get_Input));
+            return if (TW s= '');
+            object N [my Name];
+            string Nm (N.Get_Input);
+            [Cls.Variables] Nm d= TW;
+        }
+    }
+}
+
+class Function_Statement is Scoped_Statement
+{
+    property dictionary Variables;
+    property dictionary Parameters;
+    method object Get_Variable_Context
+    {
+        return [self];
+    }
+    method string Lookup_Variable [string Name]
+    {
+        if ([my Parameters] dexists Name)
+        {
+            return (dget [my Parameters] Name);
+        }
+        if ([my Variables] dexists Name)
+        {
+            return (dget [my Variables] Name);
+        }
+        forgive
+        {
+            object P [my Parent];
+            object Ctx (P.Get_Variable_Context);
+            return '' if (Ctx is null);
+            return (Ctx.Lookup_Variable Name);
+        }
+        return '';
+    }
+    method void Register_Variables
+    {
+        comment `a function registers its own parameters: each bracketed
+        parameter is a typed argument syntax whose keyword names the type.
+        parameters after the first nest inside the previous one's argument
+        chain, so the walk follows each syntax's extras.`;
+        forgive
+        {
+            list Work;
+            object P;
+            for each P in [my Listargs]
+            {
+                push Work P;
+            }
+            forever
+            {
+                break if ((llength Work) = 0);
+                object W (shift Work);
+                forgive
+                {
+                    object PC [W.Classification];
+                    object X;
+                    forgive
+                    {
+                        for each X in [PC.Arguments]
+                        {
+                            push Work X;
+                        }
+                    }
+                    string N '';
+                    string T '';
+                    if (PC is a Syntax_Tail)
+                    {
+                        comment `a later parameter rides in a comma tail:
+                        the type is its keyword, the name its argument`;
+                        object NV (lget [PC.Arguments] 0);
+                        N = (NV.Get_Input);
+                        string KW (lget [PC.Key_Words] 0);
+                        T = (i Type_From_Word KW);
+                    }
+                    else
+                    {
+                        object PV [PC.Variable];
+                        N = (PV.Get_Input);
+                        forgive
+                        {
+                            T = [PC.Data_Type];
+                        }
+                        if (T is an Element)
+                        {
+                            T = '';
+                        }
+                        if (T s= '')
+                        {
+                            T = (i Type_From_Word [PC.Keyword]);
+                        }
+                    }
+                    if ((N sgt '') and (T sgt ''))
+                    {
+                        [my Parameters] N d= T;
+                    }
+                }
+            }
+        }
+    }
+}
+
+class Method_Statement is Function_Statement
+{
+}
+class Sideways_Method_Statement is Method_Statement;
+
+class Class_Statement is Scoped_Statement
+{
+    property dictionary Variables;
+    property list Appended_Statements;
+    property flag Generate_Constructor [false];
+    method object Get_Owner_Class
+    {
+        return [self];
+    }
+}
+class Derived_Class_Statement is Class_Statement;
+class Sideways_Class_Statement is Class_Statement
+{
+    method string Get_Language_Name
+    {
+        return ([my Name].Get_Input);
+    }
+
+}
+class Class_Append_Statement is Class_Statement
+{
+    property object Primary_Class;
+    method number Infer_Appends
+    {
+        number Status 0;
+        verbosity;
+        string Name ([my Class_Name].Get_Input);
+        verbose 'class set ' Name;
+        if (not (dexists [Statement_Class:Names] Name))
+        {
+            error "'class set' could not append to nonexistent class " Name;
+        }
+        object C = (dget [Statement_Class:Names] Name);
+        my Primary_Class = C;
+        if ([my End_Position] > [C.End_Position])
+        {
+            C.End_Position = [my End_Position];
+        }
+        object S;
+        for each S in [my Block Statements]
+        {
+            verbose 'class set to ' Name ': ' [[S.Classification] class name];
+            push [C.Appended_Statements] S;
+        }
+        return 1;
+    }
+}
+class Language_Symbol_Statement is Scoped_Statement;
+class Feature_Statement is Language_Symbol_Statement;
+class Thing_Statement is Language_Symbol_Statement;
+
+class Conditional_Statement is Scoped_Statement;
+
+class If_Statement is Conditional_Statement
+{
+    property object Last_Else [null];
+}
+
+class Else_If_Statement is If_Statement
+{
+    property object If_Statement [null];
+}
+
+class Else_Statement is Conditional_Statement
+{
+    property object If_Statement [null];
+}
+
+class Error_Handling_Statement is Scoped_Statement;
+
+class Try_Statement is Error_Handling_Statement
+{
+    property object Last_Catch [null];
+}
+
+class Catch_Statement is Error_Handling_Statement
+{
+    property object Try_Statement [null];
+}
+
+class Forgive_Statement is Error_Handling_Statement;
+
+class Argument_Statement is Line_Statement;
+
+class Module_Statement is Scoped_Statement
+{
+    property list Includes;
+    property dictionary Include_Set;
+    property dictionary Variables;
+    method object Get_Module
+    {
+        return [self];
+    }
+    method object Get_Variable_Context
+    {
+        return [self];
+    }
+    method string Lookup_Variable [string Name]
+    {
+        if ([my Variables] dexists Name)
+        {
+            return (dget [my Variables] Name);
+        }
+        return '';
+    }
+    method void Add_Include [string Code]
+    {
+        return if ([my Include_Set] dexists Code);
+        push [my Includes] Code;
+        [my Include_Set] Code d= [true];
+    }
+}
+
+class Iteration_Statement is Scoped_Statement;
+class For_Statement is Iteration_Statement;
+class Dialect_Statement is Scoped_Statement;
+class Class_Generator_Statement is Class_Statement;
+
+class Parse_Memo
+{
+    comment `one packrat memoization entry: the outcome of one rule at one
+    token position. Produced holds the element objects the rule pushed, so a
+    replay re-links the same objects and the element tree is identical to a
+    fresh parse. In_Progress marks a seed planted for left-recursion support:
+    a rule that reaches its own seed fails that attempt and sets Detected,
+    which triggers seed-growing in the generated wrapper. Recorder collects
+    the memo keys stored while the seed is live, so grow iterations can
+    invalidate results that depended on the seed value.`;
+    property flag Success [false];
+    property list Produced;
+    property integer End_Token 0;
+    property integer End_Char 0;
+    property flag In_Progress [false];
+    property flag Detected [false];
+    property object Recorder [null];
+    property string Key '';
+    property integer Start_Token 0;
+}
+
+class Parser
+{
+    property string Text;
+    property integer Char_Pos 0;
+    property integer Token_Pos 0;
+    property list Tokens;
+    property list Elements;
+    property dictionary Memo;
+    property list Memo_Recorders;
+    property integer High_Water 0;
+
+    method object Top_Token
+    {
+        verbosity;
+        integer P [my Token_Pos];
+        if (P >= (llength [my Tokens]))
+        {
+            verbose 'top null';
+            return [null];
+        }
+        object Top (lget [my Tokens] P);
+        verbose 'top token: ' (Top.To_String);
+        return Top;
+    }
+    method flag Parse_Token [list Elems, string Expected]
+    {
+        verbosity;
+        object Top = (i Top_Token);
+        return [false] if (Top is null);
+        string Text [Top.Text];
+        if (Text sne Expected)
+        {
+            verbose 'parse_token expected <' Expected '> but got <' Text '>';
+            return [false];
+        }
+        verbose 'parse_token found ' Expected;
+        push Elems (i Consume_Token);
+        return [true];
+
+    }
+    method void Rollback [integer CP, integer TP, string Error]
+    {
+        verbosity;
+        verbose 'roll back to ' CP '/' TP ': ' Error;
+        forgive
+        {
+            object Top = (i Top_Token);
+            Top.Error = Error;
+            verbose 'recorded error';
+        }
+        my Char_Pos = CP;
+        my Token_Pos = TP;
+    }
+    method object Consume_Token
+    {
+        verbosity;
+        if ([my Token_Pos] >= (llength [my Tokens]))
+        {
+            verbose 'cannot consume end token';
+            return [null];
+        }
+        object Tok = (i Top_Token);
+        increment [my Token_Pos];
+        if ([my Token_Pos] > [my High_Water])
+        {
+            comment `farthest consumption point: survives rollback, so a failed
+            parse can still report where it actually got stuck`;
+            my High_Water = [my Token_Pos];
+        }
+        my Char_Pos = ([Tok.End_Position] + 1);
+        Tok.Error = [null];
+        push [my Elements] Tok;
+        verbose 'consumed token ' (Tok.To_String);
+        return Tok;
+    }
+    method void Add_Element [object Elem]
+    {
+        push [my Elements] Elem;
+    }
+
+    method object Memo_Get [string Key]
+    {
+        return [null] if (not (dexists [my Memo] Key));
+        return (dget [my Memo] Key);
+    }
+
+    method flag Memo_Replay [object Entry, list Parent_Elements]
+    {
+        comment `failure needs no position restore: rules roll back to their
+        start position before returning false, and the key encodes that start.`;
+        if [Entry.In_Progress]
+        {
+            comment `the rule reached its own seed: left recursion. fail this
+            attempt so the base-case alternative can win, and start recording
+            memo keys so grow iterations can invalidate dependent entries.
+            the recorder stack holds the head entries themselves so settles
+            can filter by position.`;
+            Entry.Detected = [true];
+            if ([Entry.Recorder] is null)
+            {
+                list R;
+                Entry.Recorder = R;
+                push [my Memo_Recorders] Entry;
+            }
+            return [false];
+        }
+        return [false] if (not [Entry.Success]);
+        my Token_Pos = [Entry.End_Token];
+        my Char_Pos = [Entry.End_Char];
+        object Elem;
+        for each Elem in [Entry.Produced]
+        {
+            push Parent_Elements Elem;
+        }
+        return [true];
+    }
+
+    method object Memo_Plant [string Key]
+    {
+        object Entry (new Parse_Memo);
+        Entry.In_Progress = [true];
+        Entry.Key = Key;
+        Entry.Start_Token = [my Token_Pos];
+        [my Memo] Key d= Entry;
+        return Entry;
+    }
+
+    method void Memo_Settle [object Entry, flag Result, list Produced]
+    {
+        Entry.In_Progress = [false];
+        Entry.Success = Result;
+        copy [Entry.Produced] = Produced;
+        Entry.End_Token = [my Token_Pos];
+        Entry.End_Char = [my Char_Pos];
+        comment `record this outcome into live recorders at the same start
+        position, excluding the head itself. positions only move forward in a
+        parse, so an entry at a later position can never consult a seed at an
+        earlier one: only same-position entries can depend on the seed, and
+        restricting invalidation to them keeps grow iterations near-linear.`;
+        object Head;
+        for each Head in [my Memo_Recorders]
+        {
+            continue if (Head = Entry);
+            continue if ([Head.Start_Token] != [Entry.Start_Token]);
+            push [Head.Recorder] [Entry.Key];
+        }
+    }
+
+    method void Memo_Regrow_Begin [object Entry]
+    {
+        comment `invalidate the same-position entries recorded during the
+        previous iteration: they may depend on the seed value that just
+        changed. a null dictionary value reads as a miss in Memo_Get, so no
+        delete is needed. the recorder stack holds the head entry itself, so
+        replacing the recorder list needs no stack manipulation.`;
+        string K;
+        for each K in [Entry.Recorder]
+        {
+            [my Memo] K d= [null];
+        }
+        list R;
+        Entry.Recorder = R;
+    }
+
+    method flag Memo_Grew [object Entry, flag Result, list Produced]
+    {
+        return [false] if (not Result);
+        return [false] if ([my Token_Pos] <= [Entry.End_Token]);
+        Entry.Success = [true];
+        copy [Entry.Produced] = Produced;
+        Entry.End_Token = [my Token_Pos];
+        Entry.End_Char = [my Char_Pos];
+        return [true];
+    }
+
+    method void Memo_Finish [object Entry]
+    {
+        return if ([Entry.Recorder] is null);
+        object Popped (pop [my Memo_Recorders]);
+        Entry.Recorder = [null];
+    }
+}
+
+class Generator
+{
+    property flag Status [false];
+    property list Elements;
+    property object Owner;
+    constructor [object O [null]]
+    {
+        my Owner = O;
+    }
+}
+
+class Document is Element
+{
+    property string File_Name;
+    property string Text;
+
+    method number Infer
+    {
+        i Infer_Text;
+        return 1;
+    }
+
+    method number Infer_Text
+    {
+        verbosity;
+        return 1.0 if (defined [my Text]);
+        string FN [my File_Name];
+        verbose 'infer text: ' FN;
+        string T;
+        if (file FN exists)
+        {
+            fread T FN;
+            my Text = T;
+            verbose 'success reading file ' FN;
+            return 1;
+        }
+        else
+        {
+            error 'no such file ' FN;
+        }
+        return 0;
+    }
+
+    method number Write_Text
+    {
+        dump [my Text] to file [my File_Name];
+        return 1;
+    }
+}
+class Compiler is Document
+{
+    property object Parser (new Parser);
+    property object Generator (new Generator [self]);
+    property object Dialect;
+    property list Characters;
+    property list Tokens;
+    property list Elements;
+    property flag Debug_Mode [true];
+
+    method number Initialize
+    {
+        if (defined [my Dialect])
+        {
+            [my Dialect].Initialize;
+        }
+    }
+
+    method number Infer
+    {
+        verbosity;
+        number Input_Result = (i Infer_Input);
+        if (Input_Result = 0)
+        {
+            say "Infer_Input failed";
+            return 0;
+        }
+        number Output_Result = (i Infer_Output);
+        if (Output_Result = 0)
+        {
+            say "Infer_Output failed";
+            return 0;
+        }
+        comment Print unclassified verbs for debugging purposes
+        if (defined [my Dialect])
+        {
+            verbose "Printing unclassified verbs...";
+            [my Dialect].Print_Unclassified_Verbs;
+        }
+        return 1;
+    }
+
+    method number Infer_Input
+    {
+        verbosity;
+        verbose "Starting input inference pipeline...";
+
+        number Text_Result = (i Infer_Text);
+        if (Text_Result = 0)
+        {
+            say "Failed at Infer_Text";
+            return 0;
+        }
+        verbose "Infer_Text completed successfully";
+
+        comment `Infer_Characters is no longer part of the standard pipeline:
+        the string lexer in Scan_Tokens reads the text directly. lexers that
+        still want per-character element objects (peg, pylex) call
+        Infer_Characters themselves before their own Infer_Tokens.`;
+
+        number Tokens_Result = (i Infer_Tokens);
+        if (Tokens_Result = 0)
+        {
+            say "Failed at Infer_Tokens";
+            return 0;
+        }
+        verbose "Infer_Tokens completed successfully";
+
+        number Elements_Result = (i Infer_Elements);
+        if (Elements_Result = 0)
+        {
+            say "Failed at Infer_Elements";
+            return 0;
+        }
+        verbose "Infer_Elements completed successfully";
+
+        comment `the element reports exist only for verbose tracing: build
+        them only when verbosity is on, because each one renders the whole
+        element list into text`;
+        string Report '';
+        string Latest '';
+        if Verbose
+        {
+            Report = (i Element_Report);
+            say Report;
+        }
+
+        number Components_Result = (i Infer_Components);
+        if (Components_Result = 0)
+        {
+            say "Failed at Infer_Components";
+            return 0;
+        }
+        if Verbose
+        {
+            Latest = (i Element_Report);
+            if (Latest sne Report)
+            {
+                say Latest;
+                Report = Latest;
+            }
+        }
+        verbose "Infer_Components completed successfully";
+
+        number Classification_Result = (i Infer_Classification);
+        if (Classification_Result = 0)
+        {
+            say "Failed at Infer_Classification";
+            return 0;
+        }
+        if Verbose
+        {
+            Latest = (i Element_Report);
+            if (Latest sne Report)
+            {
+                say Latest;
+                Report = Latest;
+            }
+        }
+        verbose "Infer_Classification completed successfully";
+
+        number Attributes_Result = (i Infer_Attributes);
+        if (Attributes_Result = 0)
+        {
+            say "Failed at Infer_Attributes";
+            return 0;
+        }
+        if Verbose
+        {
+            Latest = (i Element_Report);
+            if (Latest sne Report)
+            {
+                say Latest;
+                Report = Latest;
+            }
+        }
+        verbose "Infer_Attributes completed successfully";
+        
+        number Appends_Result = (i Infer_Appends);
+        if (Appends_Result = 0)
+        {
+            say "Failed at Infer_Appends";
+            return 0;
+        }
+        if Verbose
+        {
+            Latest = (i Element_Report);
+            if (Latest sne Report)
+            {
+                say Latest;
+                Report = Latest;
+            }
+        }
+        verbose "Infer_Appends completed successfully";
+        
+        number Ordering_Result = (i Infer_Ordering);
+        if (Ordering_Result = 0)
+        {
+            say "Failed at Infer_Ordering";
+            return 0;
+        }
+        if Verbose
+        {
+            Latest = (i Element_Report);
+            if (Latest sne Report)
+            {
+                say Latest;
+                Report = Latest;
+            }
+        }
+        verbose "Infer_Ordering completed successfully";
+        
+        number Structure_Result = (i Infer_Structure);
+        if (Structure_Result = 0)
+        {
+            say "Failed at Infer_Structure";
+            return 0;
+        }
+        if Verbose
+        {
+            Latest = (i Element_Report);
+            if (Latest sne Report)
+            {
+                say Latest;
+                Report = Latest;
+            }
+        }
+        verbose "Infer_Structure completed successfully";
+        
+        verbose "Input inference pipeline completed successfully";
+        return 1;
+    }
+
+    method number Infer_Output
+    {
+        verbosity;
+        verbose "Starting output inference pipeline...";
+        string Report '';
+        string Latest '';
+        if Verbose
+        {
+            Report = (i Element_Report);
+            say Report;
+        }
+
+        number Variables_Result = (i Infer_Variables);
+        if (Variables_Result = 0)
+        {
+            say "Failed at Infer_Variables";
+            return 0;
+        }
+        if Verbose
+        {
+            Latest = (i Element_Report);
+            if (Latest sne Report)
+            {
+                say Latest;
+                Report = Latest;
+            }
+        }
+        verbose "Infer_Variables completed successfully";
+        
+        number Type_Result = (i Infer_Type);
+        if (Type_Result = 0)
+        {
+            say "Failed at Infer_Type";
+            return 0;
+        }
+        if Verbose
+        {
+            Latest = (i Element_Report);
+            if (Latest sne Report)
+            {
+                say Latest;
+                Report = Latest;
+            }
+        }
+        verbose "Infer_Type completed successfully";
+        
+        number Class_Structure_Result = (i Infer_Class_Structure);
+        if (Class_Structure_Result = 0)
+        {
+            say "Failed at Infer_Class_Structure";
+            return 0;
+        }
+        if Verbose
+        {
+            Latest = (i Element_Report);
+            if (Latest sne Report)
+            {
+                say Latest;
+                Report = Latest;
+            }
+        }
+        verbose "Infer_Class_Structure completed successfully";
+        
+        number Inheritance_Result = (i Infer_Inheritance);
+        if (Inheritance_Result = 0)
+        {
+            say "Failed at Infer_Inheritance";
+            return 0;
+        }
+        if Verbose
+        {
+            Latest = (i Element_Report);
+            if (Latest sne Report)
+            {
+                say Latest;
+                Report = Latest;
+            }
+        }
+        verbose "Infer_Inheritance completed successfully";
+        
+        number Code_Result = (i Infer_Code);
+        if (Code_Result = 0)
+        {
+            say "Failed at Infer_Code";
+            return 0;
+        }
+        if Verbose
+        {
+            Latest = (i Element_Report);
+            if (Latest sne Report)
+            {
+                say Latest;
+                Report = Latest;
+            }
+        }
+        verbose "Infer_Code completed successfully";
+
+        comment `
+        number Intelligence_Result = (i Infer_Intelligence);
+        if (Intelligence_Result = 0)
+        {
+            say "Failed at Infer_Intelligence";
+            return 0;
+        }
+        `;
+        
+        verbose "Output inference pipeline completed successfully";
+        return 1;
+    }
+
+    method number Infer_Characters
+    {
+        return 1.0 if ((llength [my Characters]) > 0);
+        string Text [my Text];
+        object Char;
+        string C;
+        integer N;
+        integer L = ((llength Text) - 1);
+        object Prev;
+        for N range 0 L
+        {
+            C = (substring Text N 1);
+            Char = (Character:Factory [self] N C);
+            if (defined Prev)
+            {
+                Char.Prev = Prev;
+                Prev.Next = Char;
+            }
+            push [my Characters] Char;
+            Prev = Char;
+        }
+        return 1;
+    }
+
+    method number Infer_Tokens
+    {
+        return (i Scan_Tokens [true]);
+    }
+
+    method void Token_Begin [object Tok, string C, integer P]
+    {
+        Tok.Text = C;
+        Tok.Start_Position = P;
+        Tok.End_Position = P;
+    }
+
+    method flag Digit_At [integer P]
+    {
+        string T [my Text];
+        if (P >= (llength T))
+        {
+            return [false];
+        }
+        return ('0123456789' contains (substring T P 1));
+    }
+
+    method integer Scan_Word_Tail [object Tok, integer P]
+    {
+        string T [my Text];
+        integer L (llength T);
+        string C;
+        forever
+        {
+            break if (P >= L);
+            C = (substring T P 1);
+            flag Take (C is ident);
+            if ('0123456789' contains C)
+            {
+                Take = [true];
+            }
+            break if (not Take);
+            [Tok.Text] s+ C;
+            Tok.End_Position = P;
+            increment P;
+        }
+        return P;
+    }
+
+    method integer Scan_Number_Tail [object Tok, integer P]
+    {
+        string T [my Text];
+        integer L (llength T);
+        string C;
+        forever
+        {
+            break if (P >= L);
+            C = (substring T P 1);
+            if ('0123456789' contains C)
+            {
+                [Tok.Text] s+ C;
+                Tok.End_Position = P;
+                increment P;
+            }
+            else if (C s= '.')
+            {
+                comment `one decimal point, and only when a digit follows`;
+                break if ([Tok.Text] contains '.');
+                break if (not (i Digit_At (P + 1)));
+                [Tok.Text] s+ C;
+                Tok.End_Position = P;
+                increment P;
+            }
+            else
+            {
+                break;
+            }
+        }
+        return P;
+    }
+
+    method integer Scan_Quote_Tail [object Tok, integer P]
+    {
+        string T [my Text];
+        integer L (llength T);
+        string C;
+        forever
+        {
+            break if (P >= L);
+            C = (substring T P 1);
+            [Tok.Text] s+ C;
+            Tok.End_Position = P;
+            increment P;
+            if (C s= [Tok.Close_Quote])
+            {
+                Tok.Open = [false];
+                break;
+            }
+            [Tok.Unquoted] s+ C;
+        }
+        return P;
+    }
+
+    method integer Scan_Ws_Tail [object Tok, integer P]
+    {
+        string T [my Text];
+        integer L (llength T);
+        string C;
+        forever
+        {
+            break if (P >= L);
+            C = (substring T P 1);
+            break if (C s= [line]);
+            break if (not (C is whitespace));
+            [Tok.Text] s+ C;
+            Tok.End_Position = P;
+            increment P;
+        }
+        return P;
+    }
+
+    method number Scan_Tokens [flag Keep_Ws]
+    {
+        comment `the string lexer: scans the source text directly by index,
+        producing the same token stream (classes, text, positions, quote
+        bookkeeping) the character-object pipeline produced, without one
+        element per character. classification rules mirror Character:Factory
+        composed with Token:Factory; the tail scanners mirror each token
+        class's Append_Character. when Keep_Ws is off, whitespace and line
+        tokens are scanned but not kept, matching the gal compiler's old
+        Infer_Tokens override.`;
+        string Text [my Text];
+        integer L (llength Text);
+        integer N 0;
+        integer M;
+        string C;
+        string Q '"`“”‘’';
+        append Q "'«»‹›";
+        object Tok;
+        flag Skip;
+        forever
+        {
+            break if (N >= L);
+            C = (substring Text N 1);
+            M = (N + 1);
+            Skip = [false];
+            if (Q contains C)
+            {
+                Tok = (new Token_Quote);
+                Tok.Open_Quote = C;
+                Tok.Close_Quote = C;
+                if (C s= '“')
+                {
+                    Tok.Close_Quote = '”';
+                }
+                if (C s= '‘')
+                {
+                    Tok.Close_Quote = '’';
+                }
+                if (C s= '«')
+                {
+                    Tok.Close_Quote = '»';
+                }
+                if (C s= '‹')
+                {
+                    Tok.Close_Quote = '›';
+                }
+                i Token_Begin Tok C N;
+                N = (i Scan_Quote_Tail Tok M);
+            }
+            else if ('0123456789' contains C)
+            {
+                Tok = (new Token_Number);
+                i Token_Begin Tok C N;
+                N = (i Scan_Number_Tail Tok M);
+            }
+            else if (('-.' contains C) and (i Digit_At M))
+            {
+                Tok = (new Token_Number);
+                i Token_Begin Tok C N;
+                N = (i Scan_Number_Tail Tok M);
+            }
+            else if (C s= ',')
+            {
+                Tok = (new Token_Comma);
+                i Token_Begin Tok C N;
+                N = M;
+            }
+            else if (C is ident)
+            {
+                Tok = (new Token_Word);
+                i Token_Begin Tok C N;
+                N = (i Scan_Word_Tail Tok M);
+            }
+            else if (C s= [line])
+            {
+                Tok = (new Token_Line);
+                i Token_Begin Tok C N;
+                N = M;
+                Skip = (not Keep_Ws);
+            }
+            else if (C is whitespace)
+            {
+                Tok = (new Token_Ws);
+                i Token_Begin Tok C N;
+                N = (i Scan_Ws_Tail Tok M);
+                Skip = (not Keep_Ws);
+            }
+            else if (C is punctuation)
+            {
+                if ("{}[]();," contains C)
+                {
+                    Tok = (new Token_Boundary);
+                    i Token_Begin Tok C N;
+                    N = M;
+                }
+                else if (C s= '-')
+                {
+                    Tok = (new Token_Word);
+                    i Token_Begin Tok C N;
+                    N = (i Scan_Word_Tail Tok M);
+                }
+                else
+                {
+                    Tok = (new Token_Keyword);
+                    i Token_Begin Tok C N;
+                    N = M;
+                }
+            }
+            else
+            {
+                string Msg 'gal lexer: unclassifiable character <';
+                append Msg C '> at position ' (string N);
+                error Msg;
+            }
+            if (not Skip)
+            {
+                push [my Tokens] Tok;
+            }
+        }
+        return 1;
+    }
+
+    method string Element_Report
+    {
+        return ((llast [my Elements]).To_String);
+    }
+
+    method number Infer_Elements
+    {
+        list Elems;
+        object P = [my Parser];
+        P.Text = [my Text];
+        P.Tokens = [my Tokens];
+        number Status = (P.Parse_Program Elems);
+        my Elements = [P.Elements];
+        i Derive_Elements;
+        return Status;
+    }
+
+    method number Derive_Elements
+    {
+        comment `rebuild the flat element list as a post-order walk of the element
+        tree, so dependency order (children before parents) is a property of the
+        tree rather than of parse chronology. backtracking orphans and duplicate
+        token consumptions vanish because they are unreachable from the root.`;
+        return 1 if ((llength [my Elements]) = 0);
+        object Root (llast [my Elements]);
+        list Ordered;
+        i Walk_Element Root Ordered;
+        my Elements = Ordered;
+        return 1;
+    }
+
+    method void Walk_Element [object Elem, list Ordered]
+    {
+        comment `post-order: children first, then self. stop at tokens, whose
+        Elements hold the characters absorbed during lexing, not child elements.`;
+        if (Elem is a Token)
+        {
+            push Ordered Elem;
+            return;
+        }
+        forgive
+        {
+            object Child;
+            for each Child in [Elem.Elements]
+            {
+                undefined [Child.Parent]
+                {
+                    Child.Parent = Elem;
+                }
+                i Walk_Element Child Ordered;
+            }
+        }
+        push Ordered Elem;
+    }
+
+    method number Infer_Components
+    {
+        verbosity;
+        verbose [class name] ' infers components.';
+        object Elem;
+        for each Elem in [my Elements]
+        {
+            Elem.Infer_Components;
+        }
+        return 1;
+    }
+
+    method number Infer_Classification
+    {
+        verbosity;
+        verbose [class name] ' infers classification.';
+        object Elem;
+        integer End ((llength [my Elements]) - 1);
+        object D = [my Dialect];
+        integer Index;
+        for Index range End 0 -1
+        {
+            Elem = (lget [my Elements] Index);
+            if (Elem is a Spell)
+            {
+                try
+                {
+                    [Elem.Dialect].Classify Elem;
+                }
+                catch
+                {
+                    D.Classify Elem;
+                }
+            }
+        }
+        verbose [indent] [class name] ' components complete.';
+        return 1;
+    }
+
+    method number Infer_Appends
+    {
+        verbosity;
+        objects Elem Classification;
+        number Status 1;
+        number This_Status;
+        for each Elem in [my Elements]
+        {
+            Classification = [Elem.Classification];
+            verbose 'inferring appends for ' [class name Classification];
+            continue if (Classification.Infer_Appends);
+            say 'FAILED inferring appends ' [class name Classification];
+            Status = 0;
+        }
+        return Status;
+    }
+    method number Infer_Ordering
+    {
+        verbosity;
+        comment `execute sideways inheritance: move the statement parse elements
+        of each class set block into the primary class parse element, then
+        re-derive the flat element list so appended members precede their class
+        in dependency order. this makes single-pass bottom-up inference correct
+        for classes extended by class set.`;
+        object Elem;
+        list Class_Sets;
+        for each Elem in [my Elements]
+        {
+            forgive
+            {
+                if ([Elem.Classification] is a Class_Append_Statement)
+                {
+                    push Class_Sets Elem;
+                }
+            }
+        }
+        return 1 if ((llength Class_Sets) = 0);
+        flag Spliced [false];
+        object SE;
+        for each SE in Class_Sets
+        {
+            forgive
+            {
+                if (i Splice_Class_Set SE)
+                {
+                    Spliced = [true];
+                }
+            }
+        }
+        if Spliced
+        {
+            i Derive_Elements;
+        }
+        return 1;
+    }
+
+    method flag Splice_Class_Set [object SE]
+    {
+        verbosity;
+        object Target [SE.Classification Primary_Class];
+        return [false] if (Target is null);
+        object CE [null];
+        object Elem;
+        for each Elem in [my Elements]
+        {
+            if ([Elem.Classification] = Target)
+            {
+                CE = Elem;
+                break;
+            }
+        }
+        return [false] if (CE is null);
+        object SBlock (i Get_Block_Element SE);
+        object CBlock (i Get_Block_Element CE);
+        return [false] if (SBlock is null);
+        return [false] if (CBlock is null);
+        return [false] if (SBlock = CBlock);
+        verbose 'splicing class set into ' ([Target.Class_Name].Get_Input);
+        list Kept;
+        object Child;
+        flag Moved [false];
+        for each Child in [SBlock.Elements]
+        {
+            if (Child is a Statement)
+            {
+                push [CBlock.Elements] Child;
+                Moved = [true];
+            }
+            else
+            {
+                push Kept Child;
+            }
+        }
+        copy [SBlock.Elements] = Kept;
+        return Moved;
+    }
+
+    method object Get_Block_Element [object E]
+    {
+        object Found [null];
+        forgive
+        {
+            object Child;
+            for each Child in [E.Elements]
+            {
+                if (Child is a Block)
+                {
+                    Found = Child;
+                }
+            }
+        }
+        return Found;
+    }
+    
+    method number Infer_Variables
+    {
+        verbosity;
+        comment `every declaration registers its name and type in the
+        enclosing variable context, and every function registers its
+        parameters; references then resolve through the context chain`;
+        object E;
+        for each E in [my Elements]
+        {
+            forgive
+            {
+                [E.Classification].Register_Variables;
+            }
+        }
+        return 1;
+    }
+    method number Infer_Type
+    {
+        verbosity;
+        number Status (i Infer_Data_Types);
+        verbose (i Data_Type_Report);
+        return Status;
+    }
+    method number Infer_Class_Structure
+    {
+        todo;
+        return 1;
+    }
+    method number Infer_Inheritance
+    {
+        todo;
+        return 1;
+    }
+    method number Infer_Code
+    {
+        verbosity;
+        comment `Compiler elements are copied to the generator elements, and the generator is supposed to now Generate output code.`;
+        verbose 'Compiler infer code begin';
+        [my Generator Elements] = [my Elements];
+        [my Generator].Generate;
+        try
+        {
+            my Gal = [my Generator Gal];
+            if [my Debug_Mode] { console "Successfully generated code"; }
+            return 1;
+        }
+        catch E
+        {
+            if [my Debug_Mode] { console "Generator did not produce code: " E; }
+            error "generator does not have gal code, fix gal inference.";
+        }
+        verbose 'Compiler infer code end';
+    }
+    method number Infer_Intelligence
+    {
+        object Prog (llast [my Elements]);
+        return (Prog.Infer_Intelligence);
+    }
+    method string Error_Report
+    {
+        string Text 'ERROR REPORT' [line];
+        object Elem;
+        integer Count 0;
+        for each Elem in [my Elements]
+        {
+            undefined [Elem.Error]
+            {
+                continue;
+            }
+            continue if ([Elem.Error] is null);
+            append Text (string Count) '. ' [class name Elem];
+            append Text ' ERROR <' (string [Elem.Error]) '>';
+            append Text [line];
+            comment `append Text (substring (Elem.Get_Input) 0 80);
+            append Text [line 2];`;
+            increment Count;
+        }
+        return Text;
+    }
+}
+
+class Inference is Symbol
+{
+    method variant Get
+    {
+        return [my Symbol_Value];
+    }
+    method void Assign [variant Val]
+    {
+        my Symbol_Value = Val;
+    }
+    method flag Exists
+    {
+        forgive
+        {
+            return [true] if (defined [my Symbol_Value]);
+        }
+        return [false];
+    }
+    method variant Default [variant Val]
+    {
+        return [my Symbol_Value] if (defined [my Symbol_Value]);
+        return Val;
+    }
+    method variant Compute
+    {
+        error [my class name] ' did not override the Compute method';
+    }
+}
+

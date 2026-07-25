@@ -1,0 +1,22 @@
+flowerbox 'gal to c++ main';
+main [string Source_File, string Target_File]
+{
+    verbosity;
+    verbose 'gal c++ compiler';
+    verbose 'input file: ' Source_File;
+    string Report_File Target_File '.elems';
+    object GC = (new Cpp_Compiler);
+    GC.Initialize;
+    GC.File_Name = Source_File;
+    GC.Code = '<undefined>';
+    number Status = (GC.Infer);
+    if (Status = 0)
+    {
+        say 'Error inferring c++ code';
+        write (GC.Element_Report) to Report_File;
+    }
+    else
+    {
+        write [GC.Cpp] to Target_File;
+    }
+}

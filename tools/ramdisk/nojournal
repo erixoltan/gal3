@@ -1,0 +1,5 @@
+#!/bin/bash
+
+source /usr/local/lib/yottadb/r200/ydb_env_set
+/usr/local/lib/yottadb/r200/mupip set -nojournal -region "*"
+

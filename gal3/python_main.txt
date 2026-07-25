@@ -1,0 +1,24 @@
+flowerbox 'gal to python main';
+main [string Source_File, string Target_File]
+{
+    verbosity;
+    verbose 'gal python compiler';
+    verbose 'input file: ' Source_File;
+    string Report_File Target_File '.elems';
+    object PC = (new Python_Compiler);
+    PC.Initialize;
+    PC.File_Name = Source_File;
+    PC.Code = '<undefined>';
+    number Status = (PC.Infer);
+    if (Status = 0)
+    {
+        say "Error inferring python code";
+        write (PC.Element_Report) to Report_File;
+    }
+    else
+    {
+        verbose 'code:' [line] [PC.Python];
+        [PC.Dialect].Print_Unclassified_Verbs;
+        write [PC.Python] to Target_File;
+    }
+}

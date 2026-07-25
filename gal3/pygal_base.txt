@@ -1,0 +1,3161 @@
+flowerbox 'python to gal translator: classify python elements and emit gal3 source';
+
+comment `
+The classification step of the design (design doc section 10). The parse
+tree from the generated python parser is grammar-shaped; this file maps it
+onto a small semantic tree of Pyc classification nodes, mirroring the gal
+compiler's own parser-classification-generator pipeline, and then emits a
+gal3 program from that tree. The emitted program uses the python-specific
+dialect elements (python print, python while, python for range, and the
+py operations) so that every python-semantic decision lives in the gal3
+compiler's fallback generators, where a future target language can
+override it.
+
+Classification is a single bottom-up pass over the derived element list:
+children precede parents, so every element can consult its children's
+finished classifications. The default is transparent adoption - an element
+with exactly one classified child takes that child's classification, which
+collapses grammar plumbing for free. Elements with several classified
+children and no specific handler become a Pyc_Group, which either a
+handler flattens on purpose or emission rejects with the element's class
+name, so unsupported python constructs fail loudly at their own location.
+
+Milestone restrictions (documented in the design doc): module-level
+functions only, using parameters and locals; conditions are real
+comparisons; string literals are escape-free; assignment targets are plain
+names; calls target module functions or the built-ins print and str;
+for loops iterate over range with a single argument.
+`;
+
+comment 'the classification node classes: a small semantic tree for python';
+
+class Pyc is Element
+{
+    method string Gal3_Name [string N]
+    {
+        comment `python names are lowercase but gal names must begin with an
+        uppercase letter, an underscore or a dollar sign: names that are
+        already valid gal names pass through so machine-generated python
+        (whose names came from gal) round-trips readably, the rest get a
+        prefix. names the emitted program uses for its own scaffolding are
+        always prefixed. method and attribute names are never mapped - they
+        live in the attribute namespace, where builtin names such as append
+        must survive verbatim.`;
+        if ((N s= 'Base') or (N s= 'Py_Program') or (N s= 'Py_Program_Object'))
+        {
+            return (append 'Py_' N);
+        }
+        string C (substring N 0 1);
+        return N if (contains 'ABCDEFGHIJKLMNOPQRSTUVWXYZ_$' C);
+        return (append 'Py_' N);
+    }
+    method string Gal3_Py_Unescape [string T]
+    {
+        comment `decode the escape sequences the python literal carries into
+        real characters; gal literals do not process escapes, so the real
+        characters are re-encoded by Gal3_String_Text`;
+        string R '';
+        integer P 0;
+        integer L (length T);
+        forever
+        {
+            break if (P >= L);
+            string C (substring T P 1);
+            if (C sne '\')
+            {
+                append R C;
+                increment P;
+                continue;
+            }
+            string E (substring T (P + 1) 1);
+            if (E s= 'n')
+            {
+                append R [line];
+            }
+            else if (E s= 't')
+            {
+                append R [tab];
+            }
+            else if (E s= 'r')
+            {
+                append R [return];
+            }
+            else if (E s= '\')
+            {
+                append R '\';
+            }
+            else if (E s= "'")
+            {
+                append R "'";
+            }
+            else if (E s= '"')
+            {
+                append R '"';
+            }
+            else
+            {
+                error 'pygal: unsupported string escape \' E;
+            }
+            P = (P + 2);
+        }
+        return R;
+    }
+    method string Gal3_Quote_Run [string R]
+    {
+        if (not (R contains "'"))
+        {
+            return (append "'" R "'");
+        }
+        if (not (R contains '"'))
+        {
+            return (append '"' R '"');
+        }
+        error 'pygal: string mixes both quote characters';
+    }
+    method string Gal3_String_Text [string T]
+    {
+        comment `encode decoded text as a gal literal expression: a plain
+        quote when possible, otherwise an append of quoted runs and the
+        line and tab literal syntaxes`;
+        list Parts;
+        string Run '';
+        integer P 0;
+        integer L (length T);
+        forever
+        {
+            break if (P >= L);
+            string C (substring T P 1);
+            increment P;
+            if (C = [line])
+            {
+                if (Run sgt '')
+                {
+                    push Parts (i Gal3_Quote_Run Run);
+                    Run = '';
+                }
+                push Parts '[line]';
+                continue;
+            }
+            if (C = [tab])
+            {
+                if (Run sgt '')
+                {
+                    push Parts (i Gal3_Quote_Run Run);
+                    Run = '';
+                }
+                push Parts '[tab]';
+                continue;
+            }
+            if (C = [return])
+            {
+                if (Run sgt '')
+                {
+                    push Parts (i Gal3_Quote_Run Run);
+                    Run = '';
+                }
+                push Parts '[return]';
+                continue;
+            }
+            append Run C;
+        }
+        if (Run sgt '')
+        {
+            push Parts (i Gal3_Quote_Run Run);
+        }
+        return "''" if ((llength Parts) = 0);
+        return (lget Parts 0) if ((llength Parts) = 1);
+        string Code '(append';
+        string Q;
+        for each Q in Parts
+        {
+            append Code ' ' Q;
+        }
+        append Code ')';
+        return Code;
+    }
+    method string Gal3_Block_Of [list Stmts, object Mod, dictionary Scope]
+    {
+        string B '';
+        object S;
+        for each S in Stmts
+        {
+            append B (S.Gal3_Stmt Mod Scope);
+        }
+        return (append [line] '{' [line] (i Indent B) '}' [line]);
+    }
+    method string Gal3_Store_Target [object T]
+    {
+        comment `an attribute chain as an assignment destination: the same
+        bracket chain the load form uses`;
+        return (T.Gal3_Expr [null]);
+    }
+    method string Gal3_Stmt [object Mod, dictionary Scope]
+    {
+        error 'pygal: ' [class name] ' cannot appear as a statement';
+    }
+    method string Gal3_Expr [object Mod]
+    {
+        error 'pygal: ' [class name] ' cannot appear as an expression';
+    }
+}
+
+class Pyc_Group is Pyc
+{
+    comment `the default holder for several classified children with no
+    specific handler: handlers flatten these on purpose, and one reaching
+    emission means an unsupported python construct`;
+    property list Items;
+    property string From_Class '';
+    method string Gal3_Stmt [object Mod, dictionary Scope]
+    {
+        error 'pygal: unsupported construct ' [my From_Class];
+    }
+    method string Gal3_Expr [object Mod]
+    {
+        error 'pygal: unsupported construct ' [my From_Class];
+    }
+}
+
+class Pyc_Op_Tail is Pyc
+{
+    comment 'an operator and right operand awaiting a left operand';
+    property string Verb;
+    property object Operand;
+}
+
+class Pyc_Break is Pyc
+{
+    method string Gal3_Stmt [object Mod, dictionary Scope]
+    {
+        return (append 'break;' [line]);
+    }
+}
+
+class Pyc_Continue is Pyc
+{
+    method string Gal3_Stmt [object Mod, dictionary Scope]
+    {
+        return (append 'continue;' [line]);
+    }
+}
+
+class Pyc_Pass is Pyc
+{
+    method string Gal3_Stmt [object Mod, dictionary Scope]
+    {
+        return (append "comment 'pass';" [line]);
+    }
+}
+
+class Pyc_Attr is Pyc
+{
+    property object Target;
+    property string Attr_Name;
+    method flag Is_Self_Attr
+    {
+        object T [my Target];
+        return [false] if (not (T is a Pyc_Name));
+        return ([T.Py_Text] s= 'self');
+    }
+    method string Gal3_Expr [object Mod]
+    {
+        comment `attribute chains collapse into one bracket expression:
+        self.A.B becomes [my A B], X.A.B becomes [X.A B]`;
+        string Names [my Attr_Name];
+        object T [my Target];
+        forever
+        {
+            break if (not (T is a Pyc_Attr));
+            Names = (append [T.Attr_Name] ' ' Names);
+            T = [T.Target];
+        }
+        if (not (T is a Pyc_Name))
+        {
+            error 'pygal: attribute access on a computed object is not supported';
+        }
+        if ([T.Py_Text] s= 'self')
+        {
+            return (append '[my ' Names ']');
+        }
+        string First '';
+        string Rest '';
+        integer P 0;
+        integer L (length Names);
+        forever
+        {
+            break if (P >= L);
+            string C (substring Names P 1);
+            increment P;
+            if (C s= ' ')
+            {
+                Rest = (substring Names P (L - P));
+                break;
+            }
+            append First C;
+        }
+        string Code '[' (i Gal3_Name [T.Py_Text]) '.' First;
+        if (Rest sgt '')
+        {
+            append Code ' ' Rest;
+        }
+        append Code ']';
+        return Code;
+    }
+}
+
+class Pyc_Method_Call is Pyc
+{
+    property object Target;
+    property string Meth_Name;
+    property list Call_Args;
+    method string Gal3_Call [object Mod]
+    {
+        string Args '';
+        object A;
+        for each A in [my Call_Args]
+        {
+            append Args ' ' (A.Gal3_Expr Mod);
+        }
+        object T [my Target];
+        if (T is a Pyc_Name)
+        {
+            if ([T.Py_Text] s= 'self')
+            {
+                return (append 'i ' [my Meth_Name] Args);
+            }
+        }
+        comment `any expression target works: a name, an attribute chain,
+        a string literal for join, a subscript`;
+        return (append (T.Gal3_Expr Mod) '.' [my Meth_Name] Args);
+    }
+    method string Gal3_Stmt [object Mod, dictionary Scope]
+    {
+        object T [my Target];
+        if (T is a Pyc_Name)
+        {
+            if ([T.Py_Text] s= 'pdebug')
+            {
+                if ([my Meth_Name] s= 'zbreak')
+                {
+                    comment 'the compiled form of the debug statement';
+                    return (append 'debug;' [line]);
+                }
+            }
+        }
+        return (append (i Gal3_Call Mod) ';' [line]);
+    }
+    method string Gal3_Expr [object Mod]
+    {
+        return (append '(' (i Gal3_Call Mod) ')');
+    }
+}
+
+class Pyc_Classdef is Pyc
+{
+    property string Py_Cname;
+    property string Base_Name '';
+    property list Methods;
+    property list Prop_Lines;
+    method string Gal3_Class [object Mod]
+    {
+        string CN (i Gal3_Name [my Py_Cname]);
+        string Code 'class ' CN;
+        if ([my Base_Name] sgt '')
+        {
+            append Code ' is ' (i Gal3_Name [my Base_Name]);
+        }
+        if (((llength [my Methods]) = 0) and ((llength [my Prop_Lines]) = 0))
+        {
+            append Code ';' [line];
+            return Code;
+        }
+        append Code [line] '{' [line];
+        string Ms '';
+        string PL;
+        for each PL in [my Prop_Lines]
+        {
+            append Ms PL [line];
+        }
+        Mod.In_Method = [true];
+        object M;
+        for each M in [my Methods]
+        {
+            append Ms (M.Gal3_Method Mod);
+        }
+        Mod.In_Method = [false];
+        append Code (i Indent Ms) '}' [line];
+        return Code;
+    }
+}
+
+class Pyc_Kwarg is Pyc
+{
+    property string Kw_Name;
+    property object Value;
+}
+
+class Pyc_Isa is Pyc
+{
+    property object Target;
+    property list Class_Names;
+    method string Gal3_Expr [object Mod]
+    {
+        object T [my Target];
+        string Code '(py isa ' (T.Gal3_Expr Mod);
+        string N;
+        for each N in [my Class_Names]
+        {
+            append Code ' ' (i Gal3_Name N);
+        }
+        append Code ')';
+        return Code;
+    }
+}
+
+class Pyc_ListLit is Pyc
+{
+    property list Items;
+    method string Gal3_Expr [object Mod]
+    {
+        string Code '(py list';
+        object A;
+        for each A in [my Items]
+        {
+            append Code ' ' (A.Gal3_Expr Mod);
+        }
+        append Code ')';
+        return Code;
+    }
+}
+
+class Pyc_TupleLit is Pyc
+{
+    property list Items;
+    method string Gal3_Expr [object Mod]
+    {
+        string Code '(py tuple';
+        object A;
+        for each A in [my Items]
+        {
+            append Code ' ' (A.Gal3_Expr Mod);
+        }
+        append Code ')';
+        return Code;
+    }
+}
+
+class Pyc_DictLit is Pyc
+{
+    method string Gal3_Expr [object Mod]
+    {
+        return '(py dict)';
+    }
+}
+
+class Pyc_Fseg is Pyc
+{
+    comment 'a literal segment of an f-string, escapes still encoded';
+    property string Seg_Text '';
+}
+
+class Pyc_Fexpr is Pyc
+{
+    comment 'an expression segment of an f-string, parsed at emission';
+    property string Expr_Text '';
+}
+
+class Pyc_Fstring is Pyc
+{
+    property list Parts;
+    method string Gal3_Expr [object Mod]
+    {
+        return "''" if ((llength [my Parts]) = 0);
+        string Code '(py fstr';
+        object P;
+        for each P in [my Parts]
+        {
+            if (P is a Pyc_Fseg)
+            {
+                append Code ' ' (i Gal3_String_Text (i Gal3_Py_Unescape [P.Seg_Text]));
+            }
+            else
+            {
+                object C [Mod.Compiler];
+                object E (C.Pyg_Expression_Pyc [P.Expr_Text]);
+                append Code ' ' (E.Gal3_Expr Mod);
+            }
+        }
+        append Code ')';
+        return Code;
+    }
+}
+
+class Pyc_Iadd is Pyc
+{
+    comment `augmented assignment desugars to load-op-store; equivalent for
+    the strings and numbers the corpus applies it to (lists use extend)`;
+    property object Target;
+    property string Verb;
+    property object Value;
+    method string Gal3_Stmt [object Mod, dictionary Scope]
+    {
+        object T [my Target];
+        object V [my Value];
+        string Load (T.Gal3_Expr Mod);
+        string Rhs (append '(' [my Verb] ' ' Load ' ' (V.Gal3_Expr Mod) ')');
+        if (T is a Pyc_Name)
+        {
+            return (append (i Gal3_Name [T.Py_Text]) ' = ' Rhs ';' [line]);
+        }
+        if (T is a Pyc_Attr)
+        {
+            if (T.Is_Self_Attr)
+            {
+                return (append 'my ' [T.Attr_Name] ' = ' Rhs ';' [line]);
+            }
+            return (append (i Gal3_Store_Target T) ' = ' Rhs ';' [line]);
+        }
+        error 'pygal: unsupported augmented assignment target';
+    }
+}
+
+class Pyc_Raise is Pyc
+{
+    property object Exc;
+    method string Gal3_Stmt [object Mod, dictionary Scope]
+    {
+        object E [my Exc];
+        if (E is a Pyc_Call)
+        {
+            if ([E.Callee_Name] s= 'Exception')
+            {
+                if ((llength [E.Call_Args]) != 1)
+                {
+                    error 'pygal: raise Exception takes exactly one argument';
+                }
+                object A (lget [E.Call_Args] 0);
+                return (append 'python raise ' (A.Gal3_Expr Mod) ';' [line]);
+            }
+        }
+        error 'pygal: only raise Exception(message) is supported';
+    }
+}
+
+class Pyc_Except is Pyc
+{
+    comment 'an except block awaiting its try; never emitted itself';
+    property object Exc_Type [null];
+    property string Err_Name '';
+    property object Body;
+}
+
+class Pyc_Try is Pyc
+{
+    property list Body;
+    property string Err_Name '';
+    property list Catch_Body;
+    method string Gal3_Stmt [object Mod, dictionary Scope]
+    {
+        string Code 'try' (i Gal3_Block_Of [my Body] Mod Scope) 'catch';
+        if ([my Err_Name] sgt '')
+        {
+            string K [my Err_Name];
+            Scope K d= [true];
+            append Code ' ' (i Gal3_Name K);
+        }
+        append Code (i Gal3_Block_Of [my Catch_Body] Mod Scope);
+        return Code;
+    }
+}
+
+class Pyc_Forgive is Pyc
+{
+    property list Body;
+    method string Gal3_Stmt [object Mod, dictionary Scope]
+    {
+        return (append 'forgive' (i Gal3_Block_Of [my Body] Mod Scope));
+    }
+}
+
+class Pyc_Defined is Pyc
+{
+    comment `the inverse of the defined idiom galpy emits: a try whose body
+    guards each argument with if X is None: raise ValueError and whose
+    except (ValueError, AttributeError) handler is pass`;
+    property object Arg;
+    property list Body;
+    method string Gal3_Stmt [object Mod, dictionary Scope]
+    {
+        object A [my Arg];
+        string Code 'defined ' (A.Gal3_Expr Mod) (i Gal3_Block_Of [my Body] Mod Scope);
+        return Code;
+    }
+}
+
+class Pyc_Undefined is Pyc
+{
+    property object Arg;
+    property list Body;
+    method string Gal3_Stmt [object Mod, dictionary Scope]
+    {
+        object A [my Arg];
+        string Code 'undefined ' (A.Gal3_Expr Mod) (i Gal3_Block_Of [my Body] Mod Scope);
+        return Code;
+    }
+}
+
+class Pyc_For_Gal is Pyc
+{
+    comment `a range call carrying the compiled End+1 marker comes from a
+    gal for range statement; stripping the marker keeps round trips stable`;
+    property string Var_Name;
+    property object Start;
+    property object End_Expr;
+    property object Inc [null];
+    property object Body;
+    method string Gal3_Stmt [object Mod, dictionary Scope]
+    {
+        string K [my Var_Name];
+        Scope K d= [true];
+        object S [my Start];
+        object E [my End_Expr];
+        object B [my Body];
+        string Code 'for range ' (i Gal3_Name K) ' ' (S.Gal3_Expr Mod) ' ' (E.Gal3_Expr Mod);
+        if (not ([my Inc] is null))
+        {
+            object I2 [my Inc];
+            append Code ' ' (I2.Gal3_Expr Mod);
+        }
+        append Code [line] '{' [line]
+            (i Indent (B.Gal3_Stmts Mod Scope))
+            '}' [line];
+        return Code;
+    }
+}
+
+class Pyc_For_Each is Pyc
+{
+    property string Var_Name;
+    property object Iter;
+    property object Body;
+    method string Gal3_Stmt [object Mod, dictionary Scope]
+    {
+        string K [my Var_Name];
+        Scope K d= [true];
+        object It [my Iter];
+        object B [my Body];
+        string Code 'for each ' (i Gal3_Name K) ' in ' (It.Gal3_Expr Mod) [line]
+            '{' [line]
+            (i Indent (B.Gal3_Stmts Mod Scope))
+            '}' [line];
+        return Code;
+    }
+}
+
+class Pyc_Iterate is Pyc
+{
+    property object Dict_Expr;
+    property string Key_Name;
+    property string Value_Name;
+    property object Body;
+    method string Gal3_Stmt [object Mod, dictionary Scope]
+    {
+        string K [my Key_Name];
+        string V [my Value_Name];
+        Scope K d= [true];
+        Scope V d= [true];
+        object D [my Dict_Expr];
+        object B [my Body];
+        string Code 'iterate ' (D.Gal3_Expr Mod) ' ' (i Gal3_Name K) ' ' (i Gal3_Name V) [line]
+            '{' [line]
+            (i Indent (B.Gal3_Stmts Mod Scope))
+            '}' [line];
+        return Code;
+    }
+}
+
+class Pyc_Fread is Pyc
+{
+    comment `the file-read statement recovered from its compiled triple:
+    handle = open(F), var = handle.read(), handle.close()`;
+    property string Var_Name;
+    property object File_Expr;
+    method string Gal3_Stmt [object Mod, dictionary Scope]
+    {
+        object F [my File_Expr];
+        return (append 'fread ' (i Gal3_Name [my Var_Name]) ' ' (F.Gal3_Expr Mod) ';' [line]);
+    }
+}
+
+class Pyc_Debug is Pyc
+{
+    method string Gal3_Stmt [object Mod, dictionary Scope]
+    {
+        return (append 'debug;' [line]);
+    }
+}
+
+class Pyc_Default is Pyc
+{
+    comment 'a parameter default value awaiting its parameter';
+    property object Value;
+}
+
+class Pyc_SliceLit is Pyc
+{
+    comment 'a two-bound slice awaiting its subscript target';
+    property object Lower;
+    property object Upper;
+}
+
+class Pyc_Slice3 is Pyc
+{
+    property object Target;
+    property object Lower;
+    property object Upper;
+    method string Gal3_Expr [object Mod]
+    {
+        object T [my Target];
+        object L [my Lower];
+        object U [my Upper];
+        return (append '(py slice ' (T.Gal3_Expr Mod) ' ' (L.Gal3_Expr Mod) ' ' (U.Gal3_Expr Mod) ')');
+    }
+}
+
+class Pyc_Module is Pyc
+{
+    property list Stmts;
+    property dictionary Funcs;
+    property dictionary Classes;
+    property object Compiler;
+    property flag In_Method [false];
+    property list Main_Params;
+
+    method flag Pyg_Take_Main_Params [list Tops]
+    {
+        comment `the compiled main-arguments idiom: a leading try whose body
+        assigns names from sys.argv and whose handler prints usage and calls
+        sys.exit. the names become main's parameters.`;
+        return [false] if ((llength Tops) = 0);
+        comment `elided imports precede the idiom as pass markers`;
+        integer TI 0;
+        integer TN (llength Tops);
+        forever
+        {
+            return [false] if (TI >= TN);
+            object TS (lget Tops TI);
+            break if (not (TS is a Pyc_Pass));
+            increment TI;
+        }
+        object T0 (lget Tops TI);
+        return [false] if (not (T0 is a Pyc_Try));
+        list Names;
+        object S;
+        for each S in [T0.Body]
+        {
+            return [false] if (not (S is a Pyc_Assign));
+            object TN [S.Target];
+            return [false] if (not (TN is a Pyc_Name));
+            object V [S.Value];
+            return [false] if (not (V is a Pyc_Binop));
+            return [false] if (not ([V.Verb] s= 'py sub'));
+            object L [V.Left];
+            return [false] if (not (L is a Pyc_Attr));
+            object LT [L.Target];
+            return [false] if (not (LT is a Pyc_Name));
+            return [false] if (not ([LT.Py_Text] s= 'sys'));
+            return [false] if (not ([L.Attr_Name] s= 'argv'));
+            push Names [TN.Py_Text];
+        }
+        return [false] if ((llength Names) = 0);
+        flag Exits [false];
+        for each S in [T0.Catch_Body]
+        {
+            forgive
+            {
+                if (S is a Pyc_Method_Call)
+                {
+                    object MT [S.Target];
+                    if (MT is a Pyc_Name)
+                    {
+                        if ([MT.Py_Text] s= 'sys')
+                        {
+                            Exits = [true];
+                        }
+                    }
+                }
+            }
+        }
+        return [false] if (not Exits);
+        my Main_Params = Names;
+        list Keep;
+        integer KI 0;
+        object KS;
+        for each KS in Tops
+        {
+            if (KI != TI)
+            {
+                push Keep KS;
+            }
+            increment KI;
+        }
+        lclear Tops;
+        for each KS in Keep
+        {
+            push Tops KS;
+        }
+        return [true];
+    }
+
+    method flag Is_Main_Guard [object S]
+    {
+        comment `recognize if __name__ == '__main__': its suite is the
+        program body`;
+        return [false] if (not (S is a Pyc_If));
+        return [false] if (not ([S.Else_Part] is null));
+        object C [S.Cond];
+        return [false] if (not (C is a Pyc_Binop));
+        return [false] if (not ([C.Verb] s= 'py ='));
+        object L [C.Left];
+        return [false] if (not (L is a Pyc_Name));
+        return ([L.Py_Text] s= '__name__');
+    }
+
+    method string Gal3_Program
+    {
+        list Defs;
+        list Classes_L;
+        list Tops;
+        object S;
+        for each S in [my Stmts]
+        {
+            if (S is a Pyc_Funcdef)
+            {
+                push Defs S;
+            }
+            else if (S is a Pyc_Classdef)
+            {
+                push Classes_L S;
+            }
+            else if (i Is_Main_Guard S)
+            {
+                object T2 [S.Then_Suite];
+                object M2;
+                for each M2 in [T2.Stmts]
+                {
+                    push Tops M2;
+                }
+            }
+            else
+            {
+                push Tops S;
+            }
+        }
+        comment `register every module function and class before emitting
+        any body, so forward references resolve`;
+        for each S in Defs
+        {
+            string K [S.Py_Fname];
+            [my Funcs] K d= (i Gal3_Name K);
+        }
+        for each S in Classes_L
+        {
+            string K2 [S.Py_Cname];
+            [my Classes] K2 d= (i Gal3_Name K2);
+        }
+        comment `the same argument-sink Base the compiler programs get
+        from compiler_base: constructors chain to it with their own
+        arguments, so it must absorb them`;
+        comment `the whole program lives inside a module: main arguments
+        and dynamic includes both need the module context`;
+        string Code "flowerbox 'translated from python by pygal';" [line]
+            'module Compiler' [line]
+            '{' [line];
+        string Inner 'class Base' [line]
+            '{' [line]
+            '    constructor [variant A [null], variant B [null], variant C [null]];' [line]
+            '}' [line];
+        for each S in Classes_L
+        {
+            append Inner (S.Gal3_Class [self]);
+        }
+        if ((llength Defs) > 0)
+        {
+            append Inner 'class Py_Program' [line] '{' [line];
+            my In_Method = [true];
+            string Methods '';
+            for each S in Defs
+            {
+                append Methods (S.Gal3_Method [self]);
+            }
+            my In_Method = [false];
+            append Inner (i Indent Methods) '}' [line];
+        }
+        flag Has_Args (i Pyg_Take_Main_Params Tops);
+        append Inner 'main';
+        dictionary Scope;
+        if Has_Args
+        {
+            string MP;
+            flag MFirst [true];
+            for each MP in [my Main_Params]
+            {
+                Scope MP d= [true];
+                if MFirst
+                {
+                    append Inner ' [string ' (i Gal3_Name MP);
+                    MFirst = [false];
+                }
+                else
+                {
+                    append Inner ', string ' (i Gal3_Name MP);
+                }
+            }
+            append Inner ']';
+        }
+        append Inner [line] '{' [line];
+        string Body '';
+        if ((llength Defs) > 0)
+        {
+            append Body 'object Py_Program_Object = (new Py_Program);' [line];
+        }
+        for each S in Tops
+        {
+            append Body (S.Gal3_Stmt [self] Scope);
+        }
+        append Inner (i Indent Body) '}' [line];
+        append Code (i Indent Inner) '}' [line];
+        return Code;
+    }
+}
+
+class Pyc_Suite is Pyc
+{
+    property list Stmts;
+    method string Gal3_Stmts [object Mod, dictionary Scope]
+    {
+        string Code '';
+        object S;
+        for each S in [my Stmts]
+        {
+            append Code (S.Gal3_Stmt Mod Scope);
+        }
+        return Code;
+    }
+}
+
+class Pyc_Funcdef is Pyc
+{
+    property string Py_Fname;
+    property list Param_Names;
+    property list Param_Defaults;
+    property object Body;
+    property flag Is_Method [false];
+    property flag Is_Constructor [false];
+    property flag Is_Classmethod [false];
+
+    method string Gal3_Stmt [object Mod, dictionary Scope]
+    {
+        error 'pygal: nested function definitions are not supported';
+    }
+    method string Gal3_Method [object Mod]
+    {
+        dictionary Scope;
+        string Params '';
+        integer NP (llength [my Param_Names]);
+        integer Sub;
+        integer End (NP - 1);
+        for Sub range 0 End
+        {
+            string P (lget [my Param_Names] Sub);
+            Scope P d= [true];
+            if (Sub = 0)
+            {
+                Params = (append ' [variant ' (i Gal3_Name P));
+            }
+            else
+            {
+                append Params ', variant ' (i Gal3_Name P);
+            }
+            append Params (lget [my Param_Defaults] Sub);
+        }
+        if (NP > 0)
+        {
+            append Params ']';
+        }
+        comment `class method names stay verbatim to match their verbatim
+        call sites; module functions go through the name mapping because
+        their call sites resolve through the function registry`;
+        string Head 'method variant ' [my Py_Fname];
+        if (not [my Is_Method])
+        {
+            Head = (append 'method variant ' (i Gal3_Name [my Py_Fname]));
+        }
+        if [my Is_Classmethod]
+        {
+            Head = (append 'class method variant ' [my Py_Fname]);
+        }
+        if [my Is_Constructor]
+        {
+            Head = 'constructor';
+        }
+        object B [my Body];
+        string Code Head Params [line]
+            '{' [line]
+            (i Indent (B.Gal3_Stmts Mod Scope))
+            '}' [line];
+        return Code;
+    }
+}
+
+class Pyc_Return is Pyc
+{
+    property object Value [null];
+    method string Gal3_Stmt [object Mod, dictionary Scope]
+    {
+        if ([my Value] is null)
+        {
+            return (append 'return [null];' [line]);
+        }
+        object V [my Value];
+        return (append 'return ' (V.Gal3_Expr Mod) ';' [line]);
+    }
+}
+
+class Pyc_Assign is Pyc
+{
+    property object Target;
+    property object Value;
+    method string Gal3_Stmt [object Mod, dictionary Scope]
+    {
+        object T [my Target];
+        object Val [my Value];
+        string V (Val.Gal3_Expr Mod);
+        if (T is a Pyc_Name)
+        {
+            string K [T.Py_Text];
+            string N (i Gal3_Name K);
+            if (Scope dexists K)
+            {
+                return (append N ' = ' V ';' [line]);
+            }
+            Scope K d= [true];
+            comment 'first assignment in this scope declares the variable';
+            return (append 'variant ' N ' ' V ';' [line]);
+        }
+        if (T is a Pyc_Attr)
+        {
+            if (T.Is_Self_Attr)
+            {
+                return (append 'my ' [T.Attr_Name] ' = ' V ';' [line]);
+            }
+            object AT [T.Target];
+            if (AT is a Pyc_Name)
+            {
+                return (append (AT.Gal3_Expr Mod) '.' [T.Attr_Name] ' = ' V ';' [line]);
+            }
+            comment `deeper chains store through the bracket chain form,
+            the same shape gal sources use: [my Generator Elements] = V`;
+            return (append (T.Gal3_Expr Mod) ' = ' V ';' [line]);
+        }
+        if (T is a Pyc_Binop)
+        {
+            if ([T.Verb] s= 'py sub')
+            {
+                object TL [T.Left];
+                object TR [T.Right];
+                return (append 'python setitem ' (TL.Gal3_Expr Mod) ' ' (TR.Gal3_Expr Mod) ' ' V ';' [line]);
+            }
+        }
+        error 'pygal: unsupported assignment target';
+    }
+}
+
+class Pyc_If is Pyc
+{
+    property object Cond;
+    property object Then_Suite;
+    property object Else_Part [null];
+    method string Gal3_Stmt [object Mod, dictionary Scope]
+    {
+        object C [my Cond];
+        object T [my Then_Suite];
+        string Code 'if ' (C.Gal3_Expr Mod) [line]
+            '{' [line]
+            (i Indent (T.Gal3_Stmts Mod Scope))
+            '}' [line];
+        object E [my Else_Part];
+        forever
+        {
+            break if (E is null);
+            if (E is a Pyc_If)
+            {
+                object EC [E.Cond];
+                object ET [E.Then_Suite];
+                append Code 'else if ' (EC.Gal3_Expr Mod) [line]
+                    '{' [line]
+                    (i Indent (ET.Gal3_Stmts Mod Scope))
+                    '}' [line];
+                E = [E.Else_Part];
+                continue;
+            }
+            append Code 'else' [line]
+                '{' [line]
+                (i Indent (E.Gal3_Stmts Mod Scope))
+                '}' [line];
+            break;
+        }
+        return Code;
+    }
+}
+
+class Pyc_While is Pyc
+{
+    property object Cond;
+    property object Body;
+    method string Gal3_Stmt [object Mod, dictionary Scope]
+    {
+        object C [my Cond];
+        object B [my Body];
+        string Code 'python while ' (C.Gal3_Expr Mod) [line]
+            '{' [line]
+            (i Indent (B.Gal3_Stmts Mod Scope))
+            '}' [line];
+        return Code;
+    }
+}
+
+class Pyc_For_Range is Pyc
+{
+    property string Var_Name;
+    property object Start [null];
+    property object Limit;
+    property object Body;
+    method string Gal3_Stmt [object Mod, dictionary Scope]
+    {
+        string K [my Var_Name];
+        Scope K d= [true];
+        object L [my Limit];
+        object B [my Body];
+        string Bounds (L.Gal3_Expr Mod);
+        if (not ([my Start] is null))
+        {
+            object St [my Start];
+            Bounds = (append (St.Gal3_Expr Mod) ' ' Bounds);
+        }
+        string Code 'python for range ' (i Gal3_Name K) ' ' Bounds [line]
+            '{' [line]
+            (i Indent (B.Gal3_Stmts Mod Scope))
+            '}' [line];
+        return Code;
+    }
+}
+
+class Pyc_Print is Pyc
+{
+    property list Print_Args;
+    property string Sep ' ';
+    method string Gal3_Stmt [object Mod, dictionary Scope]
+    {
+        string Code 'python print';
+        if ([my Sep] s= '')
+        {
+            append Code '0';
+        }
+        object A;
+        for each A in [my Print_Args]
+        {
+            append Code ' ' (A.Gal3_Expr Mod);
+        }
+        append Code ';' [line];
+        return Code;
+    }
+}
+
+class Pyc_Str is Pyc
+{
+    property object Arg;
+    method string Gal3_Expr [object Mod]
+    {
+        object A [my Arg];
+        return (append '(py str ' (A.Gal3_Expr Mod) ')');
+    }
+}
+
+class Pyc_Call is Pyc
+{
+    property string Callee_Name;
+    property list Call_Args;
+    property list Kw_Args;
+    method string Gal3_Call [object Mod]
+    {
+        if ((llength [my Kw_Args]) > 0)
+        {
+            error 'pygal: keyword arguments survive only inside recognized idioms';
+        }
+        string K [my Callee_Name];
+        if ([Mod.Classes] dexists K)
+        {
+            string CN (dget [Mod.Classes] K);
+            string CArgs '';
+            object CA;
+            for each CA in [my Call_Args]
+            {
+                append CArgs ' ' (CA.Gal3_Expr Mod);
+            }
+            return (append 'new ' CN CArgs);
+        }
+        if (not ([Mod.Funcs] dexists K))
+        {
+            error 'pygal: call to unknown function ' K;
+        }
+        string M (dget [Mod.Funcs] K);
+        string Args '';
+        object A;
+        for each A in [my Call_Args]
+        {
+            append Args ' ' (A.Gal3_Expr Mod);
+        }
+        if [Mod.In_Method]
+        {
+            return (append 'i ' M Args);
+        }
+        return (append 'Py_Program_Object.' M Args);
+    }
+    method string Gal3_Stmt [object Mod, dictionary Scope]
+    {
+        return (append (i Gal3_Call Mod) ';' [line]);
+    }
+    method string Gal3_Expr [object Mod]
+    {
+        return (append '(' (i Gal3_Call Mod) ')');
+    }
+}
+
+class Pyc_Name is Pyc
+{
+    property string Py_Text;
+    method string Gal3_Expr [object Mod]
+    {
+        return '[true]' if ([my Py_Text] s= 'True');
+        return '[false]' if ([my Py_Text] s= 'False');
+        return '[null]' if ([my Py_Text] s= 'None');
+        return '[self]' if ([my Py_Text] s= 'self');
+        return (i Gal3_Name [my Py_Text]);
+    }
+}
+
+class Pyc_Number is Pyc
+{
+    property string Py_Text;
+    method string Gal3_Expr [object Mod]
+    {
+        return [my Py_Text];
+    }
+}
+
+class Pyc_String is Pyc
+{
+    property string Interior;
+    property flag No_Unescape [false];
+    method string Gal3_Expr [object Mod]
+    {
+        comment `the stored interior still carries python escape sequences;
+        they are decoded to real characters and re-encoded as gal literal
+        syntax, because gal strings never process escapes`;
+        string T [my Interior];
+        if (not [my No_Unescape])
+        {
+            T = (i Gal3_Py_Unescape T);
+        }
+        return (i Gal3_String_Text T);
+    }
+}
+
+class Pyc_Binop is Pyc
+{
+    property string Verb;
+    property object Left;
+    property object Right;
+    method string Gal3_Expr [object Mod]
+    {
+        object L [my Left];
+        object R [my Right];
+        if ([my Verb] s= 'py in')
+        {
+            comment `membership in string.punctuation is the compiled form
+            of the is punct operation`;
+            forgive
+            {
+                if (R is a Pyc_Attr)
+                {
+                    object RT [R.Target];
+                    if (RT is a Pyc_Name)
+                    {
+                        if (([RT.Py_Text] s= 'string') and ([R.Attr_Name] s= 'punctuation'))
+                        {
+                            return (append '(' (L.Gal3_Expr Mod) ' is punct)');
+                        }
+                    }
+                }
+            }
+        }
+        return (append '(' [my Verb] ' ' (L.Gal3_Expr Mod) ' ' (R.Gal3_Expr Mod) ')');
+    }
+}
+
+class Pyc_Unop is Pyc
+{
+    property string Verb;
+    property object Operand;
+    method string Gal3_Expr [object Mod]
+    {
+        object O [my Operand];
+        return (append '(' [my Verb] ' ' (O.Gal3_Expr Mod) ')');
+    }
+}
+
+comment 'classification: the bottom-up pass and its per-construct handlers';
+
+class set Element
+{
+    property object Pyc [null];
+
+    method flag Pyg_Is_Py_Keyword [string T]
+    {
+        string K ' and as assert async await break class continue def del elif else except finally for from global if import in is lambda nonlocal not or pass raise return try while with yield ';
+        return (contains K (append ' ' T ' '));
+    }
+
+    method void Pyg_Flatten [object P, list Into]
+    {
+        return if (P is null);
+        if (P is a Pyc_Group)
+        {
+            object M;
+            for each M in [P.Items]
+            {
+                i Pyg_Flatten M Into;
+            }
+            return;
+        }
+        push Into P;
+    }
+
+    method void Pyg_Kids [list Into]
+    {
+        comment `the classified children in order, with grammar-plumbing
+        groups flattened away`;
+        object Child;
+        for each Child in [my Elements]
+        {
+            i Pyg_Flatten [Child.Pyc] Into;
+        }
+    }
+
+    method object Pyc_Build
+    {
+        return (i Pyc_Build_Default);
+    }
+
+    method object Pyc_Build_Default
+    {
+        comment `the default: tokens classify to nothing, one classified
+        child is adopted transparently, several become a group that a
+        specific handler must consume. interior synthetics inherit their
+        rule's class, so rule handlers guard on the exact class name and
+        fall back here for their interiors.`;
+        return [null] if ([self] is a Token);
+        list Kids;
+        object Child;
+        for each Child in [my Elements]
+        {
+            continue if ([Child.Pyc] is null);
+            push Kids [Child.Pyc];
+        }
+        integer N (llength Kids);
+        return [null] if (N = 0);
+        return (lget Kids 0) if (N = 1);
+        object G (new Pyc_Group);
+        G.Items = Kids;
+        G.From_Class = [class name];
+        return G;
+    }
+
+    method object Pyg_Build_Binop [string Verb]
+    {
+        list Kids;
+        i Pyg_Kids Kids;
+        if ((llength Kids) != 2)
+        {
+            error 'pygal: ' [class name] ' expected two operands';
+        }
+        object B (new Pyc_Binop);
+        B.Verb = Verb;
+        B.Left = (lget Kids 0);
+        B.Right = (lget Kids 1);
+        return B;
+    }
+
+    method object Pyg_Build_Unop [string Verb]
+    {
+        list Kids;
+        i Pyg_Kids Kids;
+        if ((llength Kids) != 1)
+        {
+            error 'pygal: ' [class name] ' expected one operand';
+        }
+        object U (new Pyc_Unop);
+        U.Verb = Verb;
+        U.Operand = (lget Kids 0);
+        return U;
+    }
+
+    method object Pyg_Build_Tail [string Verb]
+    {
+        list Kids;
+        i Pyg_Kids Kids;
+        if ((llength Kids) != 1)
+        {
+            error 'pygal: ' [class name] ' expected one operand';
+        }
+        object T (new Pyc_Op_Tail);
+        T.Verb = Verb;
+        T.Operand = (lget Kids 0);
+        return T;
+    }
+
+    method object Pyg_Build_Fold
+    {
+        comment `left fold for chains of one associative operator:
+        a or b or c nests as ((a or b) or c)`;
+        list Kids;
+        i Pyg_Kids Kids;
+        object Acc (shift Kids);
+        object T;
+        for each T in Kids
+        {
+            if (not (T is a Pyc_Op_Tail))
+            {
+                error 'pygal: ' [class name] ' malformed operator chain';
+            }
+            object B (new Pyc_Binop);
+            B.Verb = [T.Verb];
+            B.Left = Acc;
+            B.Right = [T.Operand];
+            Acc = B;
+        }
+        return Acc;
+    }
+
+    method flag Pyg_Is_Super_Init [object S]
+    {
+        return [false] if (not (S is a Pyc_Method_Call));
+        return [false] if (not ([S.Meth_Name] s= '__init__'));
+        object T [S.Target];
+        return [false] if (not (T is a Pyc_Call));
+        return ([T.Callee_Name] s= 'super');
+    }
+
+    method object Pyg_Build_Attr
+    {
+        comment `an attribute access: the target and the attribute name.
+        the name stays verbatim - it lives in the attribute namespace.`;
+        list Kids;
+        i Pyg_Kids Kids;
+        if ((llength Kids) != 2)
+        {
+            error 'pygal: ' [class name] ' unexpected attribute shape';
+        }
+        object Nm (lget Kids 1);
+        if (not (Nm is a Pyc_Name))
+        {
+            error 'pygal: attribute name did not classify to a name';
+        }
+        object A (new Pyc_Attr);
+        A.Target = (lget Kids 0);
+        A.Attr_Name = [Nm.Py_Text];
+        return A;
+    }
+
+    method object Pyg_Build_Subscript
+    {
+        list Kids;
+        i Pyg_Kids Kids;
+        if ((llength Kids) != 2)
+        {
+            error 'pygal: ' [class name] ' unexpected subscript shape';
+        }
+        object Idx (lget Kids 1);
+        if (Idx is a Pyc_SliceLit)
+        {
+            object S3 (new Pyc_Slice3);
+            S3.Target = (lget Kids 0);
+            S3.Lower = [Idx.Lower];
+            S3.Upper = [Idx.Upper];
+            return S3;
+        }
+        object B (new Pyc_Binop);
+        B.Verb = 'py sub';
+        B.Left = (lget Kids 0);
+        B.Right = Idx;
+        return B;
+    }
+
+    method object Pyg_Guard_Arg [object S]
+    {
+        comment `recognize one guard line of the defined idiom:
+        if X is None: raise ValueError -- returns X or null`;
+        return [null] if (not (S is a Pyc_If));
+        return [null] if (not ([S.Else_Part] is null));
+        object C [S.Cond];
+        return [null] if (not (C is a Pyc_Binop));
+        return [null] if (not ([C.Verb] s= 'py is'));
+        object R [C.Right];
+        return [null] if (not (R is a Pyc_Name));
+        return [null] if (not ([R.Py_Text] s= 'None'));
+        object TS [S.Then_Suite];
+        return [null] if ((llength [TS.Stmts]) != 1);
+        object RS (lget [TS.Stmts] 0);
+        return [null] if (not (RS is a Pyc_Raise));
+        object EX [RS.Exc];
+        return [null] if (not (EX is a Pyc_Name));
+        return [null] if (not ([EX.Py_Text] s= 'ValueError'));
+        return [C.Left];
+    }
+
+    method object Pyg_As_Suite [object P]
+    {
+        comment `a same-line suite such as except Exception: pass has no
+        block element, so the single statement arrives bare`;
+        return P if (P is a Pyc_Suite);
+        object S (new Pyc_Suite);
+        push [S.Stmts] P;
+        return S;
+    }
+
+    method flag Pyg_Is_Veae [object T]
+    {
+        comment 'the (ValueError, AttributeError) tuple of the defined idiom';
+        return [false] if (not (T is a Pyc_TupleLit));
+        return [false] if ((llength [T.Items]) != 2);
+        flag Ve [false];
+        flag Ae [false];
+        object N;
+        for each N in [T.Items]
+        {
+            continue if (not (N is a Pyc_Name));
+            if ([N.Py_Text] s= 'ValueError')
+            {
+                Ve = [true];
+            }
+            if ([N.Py_Text] s= 'AttributeError')
+            {
+                Ae = [true];
+            }
+        }
+        return (Ve and Ae);
+    }
+
+    method void Pyg_Rewrite_Stmts [list Stmts]
+    {
+        comment `recover multi-statement compiled idioms. the file-read
+        triple: handle = open(F, ...), var = handle.read(), handle.close()
+        becomes one fread statement.`;
+        integer N (llength Stmts);
+        integer P 0;
+        list Out;
+        forever
+        {
+            break if (P >= N);
+            flag Matched [false];
+            if ((P + 2) < N)
+            {
+                object S0 (lget Stmts P);
+                object S1 (lget Stmts (P + 1));
+                object S2 (lget Stmts (P + 2));
+                forgive
+                {
+                    if ((S0 is a Pyc_Assign) and (S1 is a Pyc_Assign) and (S2 is a Pyc_Method_Call))
+                    {
+                        object H0 [S0.Target];
+                        object V0 [S0.Value];
+                        object T1 [S1.Target];
+                        object V1 [S1.Value];
+                        if ((H0 is a Pyc_Name) and (V0 is a Pyc_Call) and (T1 is a Pyc_Name) and (V1 is a Pyc_Method_Call))
+                        {
+                            if (([V0.Callee_Name] s= 'open') and ((llength [V0.Call_Args]) > 0))
+                            {
+                                object RT [V1.Target];
+                                object CT [S2.Target];
+                                if ((RT is a Pyc_Name) and (CT is a Pyc_Name))
+                                {
+                                    if (([RT.Py_Text] s= [H0.Py_Text]) and ([CT.Py_Text] s= [H0.Py_Text])
+                                        and ([V1.Meth_Name] s= 'read') and ([S2.Meth_Name] s= 'close'))
+                                    {
+                                        object FR (new Pyc_Fread);
+                                        FR.Var_Name = [T1.Py_Text];
+                                        FR.File_Expr = (lget [V0.Call_Args] 0);
+                                        push Out FR;
+                                        P = (P + 3);
+                                        Matched = [true];
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            continue if Matched;
+            push Out (lget Stmts P);
+            increment P;
+        }
+        lclear Stmts;
+        object O;
+        for each O in Out
+        {
+            push Stmts O;
+        }
+    }
+
+    method object Pyg_Build_Suite
+    {
+        object S (new Pyc_Suite);
+        i Pyg_Kids [S.Stmts];
+        i Pyg_Rewrite_Stmts [S.Stmts];
+        return S;
+    }
+
+    method object Pyg_Build_If
+    {
+        list Kids;
+        i Pyg_Kids Kids;
+        integer N (llength Kids);
+        if ((N < 2) or (N > 3))
+        {
+            error 'pygal: ' [class name] ' unexpected if statement shape';
+        }
+        object F (new Pyc_If);
+        F.Cond = (lget Kids 0);
+        F.Then_Suite = (lget Kids 1);
+        if (N = 3)
+        {
+            F.Else_Part = (lget Kids 2);
+        }
+        return F;
+    }
+
+    method object Pyg_Build_Def
+    {
+        comment `gathered children of a function definition: the name, then
+        one name per parameter, then the body suite`;
+        list Kids;
+        i Pyg_Kids Kids;
+        integer N (llength Kids);
+        if (N < 2)
+        {
+            error 'pygal: ' [class name] ' unexpected function definition shape';
+        }
+        object Name (lget Kids 0);
+        object Body (llast Kids);
+        if (not (Name is a Pyc_Name))
+        {
+            error 'pygal: function name did not classify to a name';
+        }
+        if (not (Body is a Pyc_Suite))
+        {
+            error 'pygal: function body did not classify to a suite; annotations and defaults are not supported';
+        }
+        object F (new Pyc_Funcdef);
+        F.Py_Fname = [Name.Py_Text];
+        F.Body = Body;
+        integer End (N - 2);
+        integer Sub;
+        for Sub range 1 End
+        {
+            object P (lget Kids Sub);
+            if (P is a Pyc_Default)
+            {
+                comment `a default rides with the parameter before it; only
+                the None default has a gal spelling so far`;
+                if ((llength [F.Param_Names]) = 0)
+                {
+                    error 'pygal: parameter default without a parameter';
+                }
+                object DV [P.Value];
+                if (not (DV is a Pyc_Name))
+                {
+                    error 'pygal: only None parameter defaults are supported';
+                }
+                if (not ([DV.Py_Text] s= 'None'))
+                {
+                    error 'pygal: only None parameter defaults are supported';
+                }
+                object Drop (pop [F.Param_Defaults]);
+                push [F.Param_Defaults] ' [null]';
+                continue;
+            }
+            if (not (P is a Pyc_Name))
+            {
+                error 'pygal: parameter did not classify to a plain name; annotations are not supported';
+            }
+            push [F.Param_Names] [P.Py_Text];
+            push [F.Param_Defaults] '';
+        }
+        return F;
+    }
+}
+
+comment 'token classifications';
+
+class set Py_Name
+{
+    method object Pyc_Build
+    {
+        comment `break, continue and pass are bare literals in the grammar's
+        simple_stmt choice, so no rule element wraps them: they classify
+        right here at the token`;
+        return (new Pyc_Break) if ([my Text] s= 'break');
+        return (new Pyc_Continue) if ([my Text] s= 'continue');
+        return (new Pyc_Pass) if ([my Text] s= 'pass');
+        return [null] if (i Pyg_Is_Py_Keyword [my Text]);
+        object P (new Pyc_Name);
+        P.Py_Text = [my Text];
+        return P;
+    }
+}
+
+class set Py_Number
+{
+    method object Pyc_Build
+    {
+        object P (new Pyc_Number);
+        P.Py_Text = [my Text];
+        return P;
+    }
+}
+
+class set Py_String
+{
+    method object Pyc_Build
+    {
+        string T [my Text];
+        integer L (length T);
+        integer Q 0;
+        string C '';
+        forever
+        {
+            break if (Q >= L);
+            C = (substring T Q 1);
+            break if ((C s= "'") or (C s= '"'));
+            increment Q;
+        }
+        string Prefix (substring T 0 Q);
+        flag Is_F [false];
+        flag Is_Raw [false];
+        string PC;
+        integer PI;
+        integer PE (Q - 1);
+        for PI range 0 PE
+        {
+            PC = (substring Prefix PI 1);
+            if ((PC s= 'f') or (PC s= 'F'))
+            {
+                Is_F = [true];
+            }
+            else if ((PC s= 'r') or (PC s= 'R'))
+            {
+                Is_Raw = [true];
+            }
+            else
+            {
+                error 'pygal: unsupported string prefix ' Prefix;
+            }
+        }
+        integer Qlen 1;
+        string Q3 (substring T Q 3);
+        if ((Q3 s= "'''") or (Q3 s= '"""'))
+        {
+            Qlen = 3;
+        }
+        integer IStart (Q + Qlen);
+        integer ILen ((L - IStart) - Qlen);
+        string Interior (substring T IStart ILen);
+        if (not Is_F)
+        {
+            object P (new Pyc_String);
+            P.Interior = Interior;
+            P.No_Unescape = Is_Raw;
+            return P;
+        }
+        if Is_Raw
+        {
+            error 'pygal: raw f-strings are not supported';
+        }
+        comment `split the f-string into literal runs and expression
+        segments; expressions are parsed at emission time`;
+        object F (new Pyc_Fstring);
+        string Run '';
+        integer P2 0;
+        integer IL (length Interior);
+        forever
+        {
+            break if (P2 >= IL);
+            string C2 (substring Interior P2 1);
+            string C22 (substring Interior P2 2);
+            if (C22 s= '{{')
+            {
+                append Run '{';
+                P2 = (P2 + 2);
+                continue;
+            }
+            if (C22 s= '}}')
+            {
+                append Run '}';
+                P2 = (P2 + 2);
+                continue;
+            }
+            if (C2 s= '{')
+            {
+                if (Run sgt '')
+                {
+                    object Sg (new Pyc_Fseg);
+                    Sg.Seg_Text = Run;
+                    push [F.Parts] Sg;
+                    Run = '';
+                }
+                integer E2 (P2 + 1);
+                string EC '';
+                string Ex '';
+                integer Depth 0;
+                flag In_Q [false];
+                string QC '';
+                forever
+                {
+                    if (E2 >= IL)
+                    {
+                        error 'pygal: unterminated f-string expression';
+                    }
+                    EC = (substring Interior E2 1);
+                    if In_Q
+                    {
+                        if (EC s= QC)
+                        {
+                            In_Q = [false];
+                        }
+                        append Ex EC;
+                        increment E2;
+                        continue;
+                    }
+                    if ((EC s= "'") or (EC s= '"'))
+                    {
+                        In_Q = [true];
+                        QC = EC;
+                        append Ex EC;
+                        increment E2;
+                        continue;
+                    }
+                    if ((EC s= '(') or (EC s= '['))
+                    {
+                        increment Depth;
+                    }
+                    else if ((EC s= ')') or (EC s= ']'))
+                    {
+                        Depth = (Depth - 1);
+                    }
+                    else if (Depth = 0)
+                    {
+                        break if (EC s= '}');
+                        comment `a colon at bracket depth zero would start a
+                        format specification, which nothing generates`;
+                        if ((EC s= '{') or (EC s= ':'))
+                        {
+                            error 'pygal: unsupported f-string expression form';
+                        }
+                    }
+                    append Ex EC;
+                    increment E2;
+                }
+                object Fx (new Pyc_Fexpr);
+                Fx.Expr_Text = Ex;
+                push [F.Parts] Fx;
+                P2 = (E2 + 1);
+                continue;
+            }
+            if (C2 s= '}')
+            {
+                error 'pygal: stray closing brace in f-string';
+            }
+            append Run C2;
+            increment P2;
+        }
+        if (Run sgt '')
+        {
+            object Sg2 (new Pyc_Fseg);
+            Sg2.Seg_Text = Run;
+            push [F.Parts] Sg2;
+        }
+        return F;
+    }
+}
+
+comment 'structure classifications';
+
+class set Python_file
+{
+    method object Pyc_Build
+    {
+        if (not ([class name] s= 'Python_file'))
+        {
+            return (i Pyc_Build_Default);
+        }
+        object M (new Pyc_Module);
+        i Pyg_Kids [M.Stmts];
+        return M;
+    }
+}
+
+class set Python_block
+{
+    method object Pyc_Build
+    {
+        return (i Pyg_Build_Suite);
+    }
+}
+
+class set Python_assignment_A50
+{
+    method object Pyc_Build
+    {
+        list Kids;
+        i Pyg_Kids Kids;
+        if ((llength Kids) != 2)
+        {
+            error 'pygal: only single-target assignment to a plain name is supported';
+        }
+        object T (lget Kids 0);
+        flag OK [false];
+        if (T is a Pyc_Name)
+        {
+            OK = [true];
+        }
+        if (T is a Pyc_Attr)
+        {
+            OK = [true];
+        }
+        if (T is a Pyc_Binop)
+        {
+            OK = [true];
+        }
+        if (not OK)
+        {
+            error 'pygal: unsupported assignment target';
+        }
+        object A (new Pyc_Assign);
+        A.Target = T;
+        A.Value = (lget Kids 1);
+        return A;
+    }
+}
+
+class set Python_return_stmt
+{
+    method object Pyc_Build
+    {
+        if (not ([class name] s= 'Python_return_stmt'))
+        {
+            return (i Pyc_Build_Default);
+        }
+        list Kids;
+        i Pyg_Kids Kids;
+        object R (new Pyc_Return);
+        if ((llength Kids) > 0)
+        {
+            R.Value = (lget Kids 0);
+        }
+        return R;
+    }
+}
+
+class set Python_function_def_raw_A84
+{
+    method object Pyc_Build
+    {
+        return (i Pyg_Build_Def);
+    }
+}
+
+class set Python_function_def_raw_A88
+{
+    method object Pyc_Build
+    {
+        return (i Pyg_Build_Def);
+    }
+}
+
+class set Python_if_stmt_A124
+{
+    method object Pyc_Build
+    {
+        return (i Pyg_Build_If);
+    }
+}
+
+class set Python_if_stmt_A125
+{
+    method object Pyc_Build
+    {
+        return (i Pyg_Build_If);
+    }
+}
+
+class set Python_elif_stmt_A127
+{
+    method object Pyc_Build
+    {
+        return (i Pyg_Build_If);
+    }
+}
+
+class set Python_elif_stmt_A128
+{
+    method object Pyc_Build
+    {
+        return (i Pyg_Build_If);
+    }
+}
+
+class set Python_while_stmt
+{
+    method object Pyc_Build
+    {
+        if (not ([class name] s= 'Python_while_stmt'))
+        {
+            return (i Pyc_Build_Default);
+        }
+        list Kids;
+        i Pyg_Kids Kids;
+        if ((llength Kids) != 2)
+        {
+            error 'pygal: while with an else clause is not supported';
+        }
+        object W (new Pyc_While);
+        W.Cond = (lget Kids 0);
+        W.Body = (lget Kids 1);
+        return W;
+    }
+}
+
+class set Python_for_stmt_A131
+{
+    method object Pyc_Build
+    {
+        list Kids;
+        i Pyg_Kids Kids;
+        integer NK (llength Kids);
+        if (NK = 4)
+        {
+            comment `for K, V in D.items() is the iterate statement coming
+            home: the tuple target flattens to two leading names`;
+            object IK (lget Kids 0);
+            object IV (lget Kids 1);
+            object IM (lget Kids 2);
+            object IB (lget Kids 3);
+            if (not (IK is a Pyc_Name))
+            {
+                error 'pygal: unsupported for loop target';
+            }
+            if (not (IV is a Pyc_Name))
+            {
+                error 'pygal: unsupported for loop target';
+            }
+            if (not (IM is a Pyc_Method_Call))
+            {
+                error 'pygal: unsupported paired for loop iterable';
+            }
+            if (not ([IM.Meth_Name] s= 'items'))
+            {
+                error 'pygal: unsupported paired for loop iterable';
+            }
+            if (not (IB is a Pyc_Suite))
+            {
+                error 'pygal: for body did not classify to a suite';
+            }
+            object IT (new Pyc_Iterate);
+            IT.Dict_Expr = [IM.Target];
+            IT.Key_Name = [IK.Py_Text];
+            IT.Value_Name = [IV.Py_Text];
+            IT.Body = IB;
+            return IT;
+        }
+        if (NK != 3)
+        {
+            error 'pygal: unsupported for loop shape';
+        }
+        object V (lget Kids 0);
+        object R (lget Kids 1);
+        object B (lget Kids 2);
+        if (not (V is a Pyc_Name))
+        {
+            error 'pygal: for target did not classify to a plain name';
+        }
+        flag Is_Range [false];
+        if (R is a Pyc_Call)
+        {
+            if ([R.Callee_Name] s= 'range')
+            {
+                Is_Range = [true];
+            }
+        }
+        if (not Is_Range)
+        {
+            comment 'any other iterable becomes a for each loop';
+            object FE (new Pyc_For_Each);
+            FE.Var_Name = [V.Py_Text];
+            FE.Iter = R;
+            FE.Body = B;
+            return FE;
+        }
+        integer NR (llength [R.Call_Args]);
+        if (NR > 1)
+        {
+            comment `an end argument of the form X + 1 is the compiled
+            marker of gal's inclusive for range: recover it directly`;
+            object RE (lget [R.Call_Args] 1);
+            object Stripped [null];
+            forgive
+            {
+                if (RE is a Pyc_Binop)
+                {
+                    if ([RE.Verb] s= 'py +')
+                    {
+                        object RR [RE.Right];
+                        if (RR is a Pyc_Number)
+                        {
+                            if ([RR.Py_Text] s= '1')
+                            {
+                                Stripped = [RE.Left];
+                            }
+                        }
+                    }
+                }
+            }
+            if (not (Stripped is null))
+            {
+                object FG (new Pyc_For_Gal);
+                FG.Var_Name = [V.Py_Text];
+                FG.Start = (lget [R.Call_Args] 0);
+                FG.End_Expr = Stripped;
+                if (NR = 3)
+                {
+                    FG.Inc = (lget [R.Call_Args] 2);
+                }
+                FG.Body = B;
+                return FG;
+            }
+        }
+        object F (new Pyc_For_Range);
+        F.Var_Name = [V.Py_Text];
+        if (NR = 1)
+        {
+            F.Limit = (lget [R.Call_Args] 0);
+        }
+        else if (NR = 2)
+        {
+            F.Start = (lget [R.Call_Args] 0);
+            F.Limit = (lget [R.Call_Args] 1);
+        }
+        else
+        {
+            error 'pygal: only one and two argument range is supported';
+        }
+        F.Body = B;
+        return F;
+    }
+}
+
+class set Python_primary_A239
+{
+    method object Pyc_Build
+    {
+        comment `a call: the callee, an open paren, optional arguments, a
+        close paren. print and str become their own classifications here,
+        the python-specific decision point the design calls for.`;
+        list Kids;
+        i Pyg_Kids Kids;
+        integer N (llength Kids);
+        if (N < 1)
+        {
+            error 'pygal: call has no callee';
+        }
+        object Callee (lget Kids 0);
+        list Args;
+        list Kwargs;
+        integer End (N - 1);
+        integer Sub;
+        for Sub range 1 End
+        {
+            object K2 (lget Kids Sub);
+            if (K2 is a Pyc_Kwarg)
+            {
+                push Kwargs K2;
+            }
+            else
+            {
+                push Args K2;
+            }
+        }
+        if (Callee is a Pyc_Attr)
+        {
+            if ((llength Kwargs) > 0)
+            {
+                error 'pygal: keyword arguments on method calls are not supported';
+            }
+            object MC (new Pyc_Method_Call);
+            MC.Target = [Callee.Target];
+            MC.Meth_Name = [Callee.Attr_Name];
+            MC.Call_Args = Args;
+            return MC;
+        }
+        if (not (Callee is a Pyc_Name))
+        {
+            error 'pygal: unsupported call target';
+        }
+        string F [Callee.Py_Text];
+        if (F s= 'print')
+        {
+            object P (new Pyc_Print);
+            P.Print_Args = Args;
+            object KW;
+            for each KW in Kwargs
+            {
+                if ([KW.Kw_Name] s= 'sep')
+                {
+                    object KV [KW.Value];
+                    if (not (KV is a Pyc_String))
+                    {
+                        error 'pygal: print sep must be a string literal';
+                    }
+                    P.Sep = [KV.Interior];
+                }
+                else
+                {
+                    error 'pygal: unsupported print keyword ' [KW.Kw_Name];
+                }
+            }
+            return P;
+        }
+        if (F s= 'str')
+        {
+            if ((llength Args) != 1)
+            {
+                error 'pygal: str takes exactly one argument';
+            }
+            object S (new Pyc_Str);
+            S.Arg = (lget Args 0);
+            return S;
+        }
+        if (F s= 'len')
+        {
+            if ((llength Args) != 1)
+            {
+                error 'pygal: len takes exactly one argument';
+            }
+            object U (new Pyc_Unop);
+            U.Verb = 'py len';
+            U.Operand = (lget Args 0);
+            return U;
+        }
+        if (F s= 'isinstance')
+        {
+            if ((llength Args) != 2)
+            {
+                error 'pygal: isinstance takes exactly two arguments';
+            }
+            object IT (new Pyc_Isa);
+            IT.Target = (lget Args 0);
+            object CS (lget Args 1);
+            if (CS is a Pyc_Name)
+            {
+                push [IT.Class_Names] [CS.Py_Text];
+            }
+            else if (CS is a Pyc_TupleLit)
+            {
+                object TN;
+                for each TN in [CS.Items]
+                {
+                    if (not (TN is a Pyc_Name))
+                    {
+                        error 'pygal: isinstance classes must be plain names';
+                    }
+                    push [IT.Class_Names] [TN.Py_Text];
+                }
+            }
+            else
+            {
+                error 'pygal: unsupported isinstance class argument';
+            }
+            return IT;
+        }
+        object C (new Pyc_Call);
+        C.Callee_Name = F;
+        C.Call_Args = Args;
+        C.Kw_Args = Kwargs;
+        return C;
+    }
+}
+
+comment 'operator classifications';
+
+class set Python_sum_A225
+{
+    method object Pyc_Build
+    {
+        return (i Pyg_Build_Binop 'py +');
+    }
+}
+
+class set Python_sum_A226
+{
+    method object Pyc_Build
+    {
+        return (i Pyg_Build_Binop 'py -');
+    }
+}
+
+class set Python_term_A227
+{
+    method object Pyc_Build
+    {
+        return (i Pyg_Build_Binop 'py *');
+    }
+}
+
+class set Python_term_A228
+{
+    method object Pyc_Build
+    {
+        return (i Pyg_Build_Binop 'py /');
+    }
+}
+
+class set Python_term_A230
+{
+    method object Pyc_Build
+    {
+        return (i Pyg_Build_Binop 'py mod');
+    }
+}
+
+class set Python_factor_A232
+{
+    method object Pyc_Build
+    {
+        comment 'unary plus is the identity';
+        list Kids;
+        i Pyg_Kids Kids;
+        if ((llength Kids) != 1)
+        {
+            error 'pygal: unary plus expected one operand';
+        }
+        return (lget Kids 0);
+    }
+}
+
+class set Python_factor_A233
+{
+    method object Pyc_Build
+    {
+        return (i Pyg_Build_Unop 'py neg');
+    }
+}
+
+class set Python_inversion_A217
+{
+    method object Pyc_Build
+    {
+        return (i Pyg_Build_Unop 'py not');
+    }
+}
+
+class set Python_disjunction_P214
+{
+    method object Pyc_Build
+    {
+        return (i Pyg_Build_Tail 'py or');
+    }
+}
+
+class set Python_disjunction_A213
+{
+    method object Pyc_Build
+    {
+        return (i Pyg_Build_Fold);
+    }
+}
+
+class set Python_conjunction_P216
+{
+    method object Pyc_Build
+    {
+        return (i Pyg_Build_Tail 'py and');
+    }
+}
+
+class set Python_conjunction_A215
+{
+    method object Pyc_Build
+    {
+        return (i Pyg_Build_Fold);
+    }
+}
+
+class set Python_eq_bitwise_or
+{
+    method object Pyc_Build
+    {
+        return (i Pyg_Build_Tail 'py =');
+    }
+}
+
+class set Python_noteq_bitwise_or
+{
+    method object Pyc_Build
+    {
+        if (not ([class name] s= 'Python_noteq_bitwise_or'))
+        {
+            return (i Pyc_Build_Default);
+        }
+        return (i Pyg_Build_Tail 'py !=');
+    }
+}
+
+class set Python_lte_bitwise_or
+{
+    method object Pyc_Build
+    {
+        return (i Pyg_Build_Tail 'py <=');
+    }
+}
+
+class set Python_lt_bitwise_or
+{
+    method object Pyc_Build
+    {
+        return (i Pyg_Build_Tail 'py <');
+    }
+}
+
+class set Python_gte_bitwise_or
+{
+    method object Pyc_Build
+    {
+        return (i Pyg_Build_Tail 'py >=');
+    }
+}
+
+class set Python_gt_bitwise_or
+{
+    method object Pyc_Build
+    {
+        return (i Pyg_Build_Tail 'py >');
+    }
+}
+
+class set Python_comparison_A218
+{
+    method object Pyc_Build
+    {
+        comment `a chained comparison such as a < b < c evaluates b once in
+        python, which a naive fold would not preserve: restrict to a single
+        comparison until chaining is modeled honestly`;
+        list Kids;
+        i Pyg_Kids Kids;
+        if ((llength Kids) != 2)
+        {
+            error 'pygal: chained comparisons are not supported';
+        }
+        object T (lget Kids 1);
+        if (not (T is a Pyc_Op_Tail))
+        {
+            error 'pygal: malformed comparison';
+        }
+        object B (new Pyc_Binop);
+        B.Verb = [T.Verb];
+        B.Left = (lget Kids 0);
+        B.Right = [T.Operand];
+        return B;
+    }
+}
+
+comment 'object and class classifications';
+
+class set Python_function_def_A83
+{
+    method object Pyc_Build
+    {
+        comment `a decorated function: the only decorator gal emits is
+        classmethod, from the class method statement`;
+        list Kids;
+        i Pyg_Kids Kids;
+        if ((llength Kids) != 2)
+        {
+            error 'pygal: unsupported decorated function';
+        }
+        object D (lget Kids 0);
+        object F (lget Kids 1);
+        if (not (D is a Pyc_Name))
+        {
+            error 'pygal: unsupported decorator expression';
+        }
+        if (not ([D.Py_Text] s= 'classmethod'))
+        {
+            error 'pygal: unsupported decorator ' [D.Py_Text];
+        }
+        if (not (F is a Pyc_Funcdef))
+        {
+            error 'pygal: decorated member did not classify to a function';
+        }
+        F.Is_Classmethod = [true];
+        return F;
+    }
+}
+
+class set Python_class_def_raw
+{
+    method object Pyc_Build
+    {
+        if (not ([class name] s= 'Python_class_def_raw'))
+        {
+            return (i Pyc_Build_Default);
+        }
+        list Kids;
+        i Pyg_Kids Kids;
+        integer N (llength Kids);
+        if (N < 2)
+        {
+            error 'pygal: unexpected class definition shape';
+        }
+        if (N > 3)
+        {
+            error 'pygal: multiple inheritance is not supported';
+        }
+        object Nm (lget Kids 0);
+        object Su (llast Kids);
+        if (not (Nm is a Pyc_Name))
+        {
+            error 'pygal: class name did not classify to a name';
+        }
+        if (not (Su is a Pyc_Suite))
+        {
+            error 'pygal: class body did not classify to a suite';
+        }
+        object CD (new Pyc_Classdef);
+        CD.Py_Cname = [Nm.Py_Text];
+        if (N = 3)
+        {
+            object Bs (lget Kids 1);
+            if (not (Bs is a Pyc_Name))
+            {
+                error 'pygal: unsupported base class expression';
+            }
+            CD.Base_Name = [Bs.Py_Text];
+        }
+        object M;
+        for each M in [Su.Stmts]
+        {
+            if (M is a Pyc_Funcdef)
+            {
+                if ((llength [M.Param_Names]) > 0)
+                {
+                    string P0 (lget [M.Param_Names] 0);
+                    if ((P0 s= 'self') or ((P0 s= 'cls') and [M.Is_Classmethod]))
+                    {
+                        object Ignore (shift [M.Param_Names]);
+                        object Ignore3 (shift [M.Param_Defaults]);
+                        M.Is_Method = [true];
+                    }
+                }
+                if ([M.Py_Fname] s= '__init__')
+                {
+                    M.Is_Constructor = [true];
+                    comment `drop a leading super().__init__ call: gal
+                    constructors chain to the ancestor automatically`;
+                    object MB [M.Body];
+                    if ((llength [MB.Stmts]) > 0)
+                    {
+                        object S0 (lget [MB.Stmts] 0);
+                        if (i Pyg_Is_Super_Init S0)
+                        {
+                            object Ignore2 (shift [MB.Stmts]);
+                        }
+                    }
+                }
+                push [CD.Methods] M;
+                continue;
+            }
+            continue if (M is a Pyc_Pass);
+            if (M is a Pyc_Assign)
+            {
+                object PT [M.Target];
+                if (not (PT is a Pyc_Name))
+                {
+                    error 'pygal: unsupported class property target';
+                }
+                object PV [M.Value];
+                string PN [PT.Py_Text];
+                if (PV is a Pyc_DictLit)
+                {
+                    push [CD.Prop_Lines] (append 'class property dictionary ' PN ';');
+                }
+                else if (PV is a Pyc_ListLit)
+                {
+                    if ((llength [PV.Items]) > 0)
+                    {
+                        error 'pygal: class list properties start empty';
+                    }
+                    push [CD.Prop_Lines] (append 'class property list ' PN ';');
+                }
+                else if (PV is a Pyc_String)
+                {
+                    push [CD.Prop_Lines] (append 'class property string ' PN ' ' (PV.Gal3_Expr [null]) ';');
+                }
+                else if (PV is a Pyc_Number)
+                {
+                    push [CD.Prop_Lines] (append 'class property number ' PN ' ' (PV.Gal3_Expr [null]) ';');
+                }
+                else
+                {
+                    error 'pygal: unsupported class property value';
+                }
+                continue;
+            }
+            error 'pygal: unsupported class member';
+        }
+        return CD;
+    }
+}
+
+class set Python_primary_A237
+{
+    method object Pyc_Build
+    {
+        return (i Pyg_Build_Attr);
+    }
+}
+
+class set Python_t_primary_A355
+{
+    method object Pyc_Build
+    {
+        return (i Pyg_Build_Attr);
+    }
+}
+
+class set Python_target_with_star_atom_A341
+{
+    method object Pyc_Build
+    {
+        return (i Pyg_Build_Attr);
+    }
+}
+
+class set Python_single_subscript_attribute_target_A351
+{
+    method object Pyc_Build
+    {
+        return (i Pyg_Build_Attr);
+    }
+}
+
+class set Python_single_subscript_attribute_target_A353
+{
+    method object Pyc_Build
+    {
+        return (i Pyg_Build_Subscript);
+    }
+}
+
+class set Python_primary_A241
+{
+    method object Pyc_Build
+    {
+        return (i Pyg_Build_Subscript);
+    }
+}
+
+class set Python_t_primary_A357
+{
+    method object Pyc_Build
+    {
+        return (i Pyg_Build_Subscript);
+    }
+}
+
+class set Python_target_with_star_atom_A343
+{
+    method object Pyc_Build
+    {
+        return (i Pyg_Build_Subscript);
+    }
+}
+
+class set Python_kwarg_or_starred_A324
+{
+    method object Pyc_Build
+    {
+        list Kids;
+        i Pyg_Kids Kids;
+        if ((llength Kids) != 2)
+        {
+            error 'pygal: unexpected keyword argument shape';
+        }
+        object Nm (lget Kids 0);
+        if (not (Nm is a Pyc_Name))
+        {
+            error 'pygal: keyword argument name did not classify to a name';
+        }
+        object KW (new Pyc_Kwarg);
+        KW.Kw_Name = [Nm.Py_Text];
+        KW.Value = (lget Kids 1);
+        return KW;
+    }
+}
+
+class set Python_is_bitwise_or
+{
+    method object Pyc_Build
+    {
+        return (i Pyg_Build_Tail 'py is');
+    }
+}
+
+class set Python_isnot_bitwise_or
+{
+    method object Pyc_Build
+    {
+        return (i Pyg_Build_Tail 'py is not');
+    }
+}
+
+class set Python_in_bitwise_or
+{
+    method object Pyc_Build
+    {
+        return (i Pyg_Build_Tail 'py in');
+    }
+}
+
+class set Python_list
+{
+    method object Pyc_Build
+    {
+        if (not ([class name] s= 'Python_list'))
+        {
+            return (i Pyc_Build_Default);
+        }
+        object LL (new Pyc_ListLit);
+        i Pyg_Kids [LL.Items];
+        return LL;
+    }
+}
+
+class set Python_tuple
+{
+    method object Pyc_Build
+    {
+        if (not ([class name] s= 'Python_tuple'))
+        {
+            return (i Pyc_Build_Default);
+        }
+        object TL (new Pyc_TupleLit);
+        i Pyg_Kids [TL.Items];
+        return TL;
+    }
+}
+
+class set Python_dict
+{
+    method object Pyc_Build
+    {
+        if (not ([class name] s= 'Python_dict'))
+        {
+            return (i Pyc_Build_Default);
+        }
+        list Kids;
+        i Pyg_Kids Kids;
+        if ((llength Kids) > 0)
+        {
+            error 'pygal: only the empty dictionary literal is supported';
+        }
+        return (new Pyc_DictLit);
+    }
+}
+
+class set Python_import_name
+{
+    method object Pyc_Build
+    {
+        comment `imports are runtime plumbing that the gal3 compiler
+        regenerates itself when the program is compiled back to a target`;
+        return (new Pyc_Pass);
+    }
+}
+
+class set Python_import_from
+{
+    method object Pyc_Build
+    {
+        return (new Pyc_Pass);
+    }
+}
+
+comment 'wave B classifications: augmented assignment, raise, try, slices';
+
+class set Python_assignment_A55
+{
+    method object Pyc_Build
+    {
+        comment `augmented assignment: the operator token sits between the
+        gathered kids, so it is read off the raw children`;
+        list Kids;
+        i Pyg_Kids Kids;
+        if ((llength Kids) != 2)
+        {
+            error 'pygal: unexpected augmented assignment shape';
+        }
+        string Op '';
+        object Child;
+        for each Child in [my Elements]
+        {
+            if (Child is a Py_Op)
+            {
+                Op = [Child.Text];
+            }
+        }
+        string Verb '';
+        if (Op s= '+=')
+        {
+            Verb = 'py +';
+        }
+        else if (Op s= '-=')
+        {
+            Verb = 'py -';
+        }
+        else
+        {
+            error 'pygal: unsupported augmented assignment operator ' Op;
+        }
+        object IA (new Pyc_Iadd);
+        IA.Target = (lget Kids 0);
+        IA.Verb = Verb;
+        IA.Value = (lget Kids 1);
+        return IA;
+    }
+}
+
+class set Python_raise_stmt_A58
+{
+    method object Pyc_Build
+    {
+        list Kids;
+        i Pyg_Kids Kids;
+        if ((llength Kids) != 1)
+        {
+            error 'pygal: only raise with a single exception is supported';
+        }
+        object RS (new Pyc_Raise);
+        RS.Exc = (lget Kids 0);
+        return RS;
+    }
+}
+
+class set Python_except_block_A157
+{
+    method object Pyc_Build
+    {
+        list Kids;
+        i Pyg_Kids Kids;
+        integer N (llength Kids);
+        object EX (new Pyc_Except);
+        if (N = 2)
+        {
+            EX.Exc_Type = (lget Kids 0);
+            EX.Body = (i Pyg_As_Suite (lget Kids 1));
+        }
+        else if (N = 3)
+        {
+            EX.Exc_Type = (lget Kids 0);
+            object Nm (lget Kids 1);
+            if (not (Nm is a Pyc_Name))
+            {
+                error 'pygal: except name did not classify to a name';
+            }
+            EX.Err_Name = [Nm.Py_Text];
+            EX.Body = (i Pyg_As_Suite (lget Kids 2));
+        }
+        else
+        {
+            error 'pygal: unexpected except block shape';
+        }
+        return EX;
+    }
+}
+
+class set Python_except_block_A159
+{
+    method object Pyc_Build
+    {
+        list Kids;
+        i Pyg_Kids Kids;
+        if ((llength Kids) != 1)
+        {
+            error 'pygal: unexpected bare except shape';
+        }
+        object EX (new Pyc_Except);
+        EX.Body = (i Pyg_As_Suite (lget Kids 0));
+        return EX;
+    }
+}
+
+class set Python_try_stmt_A151
+{
+    method object Pyc_Build
+    {
+        comment `one try, exactly one handler, no else or finally - the only
+        shape gal generates. three gal statements come home from here: the
+        defined and undefined idioms (guarded ValueError raises with an
+        except (ValueError, AttributeError) handler) and forgive (a pass
+        handler); everything else is a plain try/catch.`;
+        list Kids;
+        i Pyg_Kids Kids;
+        if ((llength Kids) != 2)
+        {
+            string Diag '';
+            object DK;
+            for each DK in Kids
+            {
+                append Diag ' ' [class DK name];
+            }
+            error 'pygal: only try with exactly one except block is supported, got' Diag;
+        }
+        object TB (lget Kids 0);
+        object H (lget Kids 1);
+        if (not (TB is a Pyc_Suite))
+        {
+            error 'pygal: try body did not classify to a suite';
+        }
+        if (not (H is a Pyc_Except))
+        {
+            error 'pygal: try handler did not classify to an except block';
+        }
+        object HB [H.Body];
+        flag HB_Pass [false];
+        if ((llength [HB.Stmts]) = 1)
+        {
+            object H0 (lget [HB.Stmts] 0);
+            if (H0 is a Pyc_Pass)
+            {
+                HB_Pass = [true];
+            }
+        }
+        object HT [H.Exc_Type];
+        if (i Pyg_Is_Veae HT)
+        {
+            if ((llength [TB.Stmts]) < 1)
+            {
+                error 'pygal: unrecognized guarded try idiom';
+            }
+            object G0 (lget [TB.Stmts] 0);
+            object Arg (i Pyg_Guard_Arg G0);
+            if (Arg is null)
+            {
+                error 'pygal: unrecognized guarded try idiom';
+            }
+            list Rest;
+            integer Sub;
+            integer End ((llength [TB.Stmts]) - 1);
+            for Sub range 1 End
+            {
+                object RG (i Pyg_Guard_Arg (lget [TB.Stmts] Sub));
+                if (not (RG is null))
+                {
+                    error 'pygal: multiple defined guards are not supported yet';
+                }
+                push Rest (lget [TB.Stmts] Sub);
+            }
+            if HB_Pass
+            {
+                object DF (new Pyc_Defined);
+                DF.Arg = Arg;
+                DF.Body = Rest;
+                return DF;
+            }
+            if ((llength Rest) = 0)
+            {
+                object UD (new Pyc_Undefined);
+                UD.Arg = Arg;
+                UD.Body = [HB.Stmts];
+                return UD;
+            }
+            error 'pygal: unrecognized guarded try idiom';
+        }
+        flag Catchall [false];
+        if (HT is null)
+        {
+            Catchall = [true];
+        }
+        else if (HT is a Pyc_Name)
+        {
+            if ([HT.Py_Text] s= 'Exception')
+            {
+                Catchall = [true];
+            }
+        }
+        if (not Catchall)
+        {
+            error 'pygal: only except Exception handlers are supported';
+        }
+        if (HB_Pass and ([H.Err_Name] s= ''))
+        {
+            object FG (new Pyc_Forgive);
+            FG.Body = [TB.Stmts];
+            return FG;
+        }
+        object TR (new Pyc_Try);
+        TR.Body = [TB.Stmts];
+        TR.Err_Name = [H.Err_Name];
+        TR.Catch_Body = [HB.Stmts];
+        return TR;
+    }
+}
+
+class set Python_default
+{
+    method object Pyc_Build
+    {
+        if (not ([class name] s= 'Python_default'))
+        {
+            return (i Pyc_Build_Default);
+        }
+        list Kids;
+        i Pyg_Kids Kids;
+        if ((llength Kids) != 1)
+        {
+            error 'pygal: unexpected parameter default shape';
+        }
+        object D (new Pyc_Default);
+        D.Value = (lget Kids 0);
+        return D;
+    }
+}
+
+class set Python_slice_A248
+{
+    method object Pyc_Build
+    {
+        list Kids;
+        i Pyg_Kids Kids;
+        if ((llength Kids) != 2)
+        {
+            error 'pygal: only two-bound slices are supported';
+        }
+        object SL (new Pyc_SliceLit);
+        SL.Lower = (lget Kids 0);
+        SL.Upper = (lget Kids 1);
+        return SL;
+    }
+}
+
+comment 'the translator compiler';
+
+
+
+class Pygal_Compiler is Py_Parse_Compiler
+{
+    property string Gal3;
+
+    method object Pyg_Expression_Pyc [string T]
+    {
+        comment `parse one python expression - the interior of an f-string
+        segment - with a child compiler, classify its elements, and return
+        the root classification. the padding of the generated { expr } form
+        must go, or the sub-lexer reads it as indentation.`;
+        forever
+        {
+            integer L2 (length T);
+            break if (L2 = 0);
+            string C2 (substring T 0 1);
+            break if ((C2 sne ' ') and (C2 sne [tab]));
+            T = (substring T 1 (L2 - 1));
+        }
+        forever
+        {
+            integer L3 (length T);
+            break if (L3 = 0);
+            string C3 (substring T (L3 - 1) 1);
+            break if ((C3 sne ' ') and (C3 sne [tab]));
+            T = (substring T 0 (L3 - 1));
+        }
+        object C (new Pygal_Compiler);
+        C.Text = (append T [line]);
+        if ((C.Tokenize) = 0)
+        {
+            error 'pygal: cannot tokenize f-string expression: ' T;
+        }
+        object P [C.Parser];
+        P.Text = [C.Text];
+        P.Tokens = [C.Tokens];
+        list Elems;
+        number Status (P.Parse_Python_expression Elems);
+        if (Status = 0)
+        {
+            error 'pygal: cannot parse f-string expression: ' T;
+        }
+        if ((llength Elems) = 0)
+        {
+            error 'pygal: f-string expression produced no elements: ' T;
+        }
+        comment `the winning root is what the parse pushed into Elems; the
+        parser's own element list also holds orphans from discarded
+        left-recursion grow iterations, so the flat list is derived by
+        walking the winning tree`;
+        object Root (llast Elems);
+        list Ordered;
+        C.Walk_Element Root Ordered;
+        C.Elements = Ordered;
+        object Elem;
+        for each Elem in [C.Elements]
+        {
+            Elem.Pyc = (Elem.Pyc_Build);
+        }
+        object R [Root.Pyc];
+        if (R is null)
+        {
+            error 'pygal: f-string expression classified to nothing: ' T;
+        }
+        return R;
+    }
+
+    method number Translate
+    {
+        verbosity;
+        return 0 if ((i Parse_Python) = 0);
+        verbose 'pygal: classifying ' (string (llength [my Elements])) ' elements';
+        object Elem;
+        for each Elem in [my Elements]
+        {
+            Elem.Pyc = (Elem.Pyc_Build);
+        }
+        object Root (llast [my Elements]);
+        object M [Root.Pyc];
+        if (not (M is a Pyc_Module))
+        {
+            say 'pygal: the program root did not classify to a module';
+            return 0;
+        }
+        M.Compiler = [self];
+        my Gal3 = (M.Gal3_Program);
+        return 1;
+    }
+}

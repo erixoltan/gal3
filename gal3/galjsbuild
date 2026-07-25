@@ -1,0 +1,83 @@
+#!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Fast rebuild of just the galjs_33 artifact with the fixpoint binaries
+# (gal_33.py / fallback_33.py / galpy_33.py). Valid ONLY while edits are
+# confined to javascript_inference.txt / javascript_main.txt — enforced
+# below: any drift in a shared source aborts with "run the full loop".
+#
+# Writes galjs_33.{txt,tx2,gal,atomic,py} in $BUILD (so jsself's staleness
+# guard stays coherent) and installs galjs_33.py in ~/.gal3/.
+#
+# NOTE: galjs.py and galjs_3.py go stale during this loop — they are
+# bootstrap-only; the full ./build && ./selfbuild && ./selfself
+# re-establishes them at milestone boundaries.
+
+source "$(dirname "$(readlink -f "$0")")/../galenv" || exit 1
+
+SRC="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+BUILD="${GAL_BUILD:-$GAL_HOME/gal3build}"
+BIN="$HOME/.gal3"
+mkdir -p "$BUILD" "$BIN"
+
+# Discipline guard: every non-JS source in the galjs stack must match the
+# copy the last full loop consumed. If one drifted, the fixpoint binaries
+# no longer correspond to the sources and this shortcut is invalid.
+SHARED="compiler_base compiler_dialect attributes_inference structure_inference data_type_inference inheritance_inference llm_inference gal_base fallback_inference"
+for f in $SHARED; do
+    if ! cmp -s "$SRC/$f.txt" "$BUILD/$f.txt"; then
+        echo "galjsbuild: shared source $f.txt differs from the last full loop."
+        echo "run ./build && ./selfbuild && ./selfself first."
+        exit 1
+    fi
+done
+
+cp "$SRC/javascript_inference.txt" "$SRC/javascript_main.txt" "$BUILD"/ || exit 1
+
+# Re-concatenate the galjs stack exactly as selfself does (new = one blank
+# line, then appends; zero itself starts with a blank line).
+echo "">"$BUILD/zero.txt"
+cat "$BUILD/compiler_base.txt" "$BUILD/compiler_dialect.txt" \
+    "$BUILD/attributes_inference.txt" "$BUILD/structure_inference.txt" \
+    "$BUILD/data_type_inference.txt" "$BUILD/inheritance_inference.txt" "$BUILD/llm_inference.txt" >> "$BUILD/zero.txt"
+
+echo "">"$BUILD/galjs_33.txt"
+cat "$BUILD/zero.txt" "$BUILD/gal_base.txt" "$BUILD/fallback_inference.txt" \
+    "$BUILD/javascript_inference.txt" "$BUILD/llm_inference.txt" \
+    "$BUILD/javascript_main.txt" >> "$BUILD/galjs_33.txt"
+
+echo "module Compiler {">"$BUILD/galjs_33.tx2"
+cat "$BUILD/galjs_33.txt">>"$BUILD/galjs_33.tx2"
+echo "}">>"$BUILD/galjs_33.tx2"
+
+function run33
+{
+    # run33 <binary> <in> <out>: run a _33 fixpoint binary, require output.
+    rm -f "$3"
+    echo "        $1 $2 '-->' $3"
+    python "$BIN/$1.py" "$2" "$3"
+    if [ ! -f "$3" ]; then
+        echo "galjsbuild: $1 did not create $3. aborting"
+        exit 1
+    fi
+}
+
+run33 gal_33 "$BUILD/galjs_33.tx2" "$BUILD/galjs_33.gal"
+
+# fallback to fixpoint, same protocol as selfself's atomic()
+FALLBACK="$BUILD/galjs_33.fallback"
+cp "$BUILD/galjs_33.gal" "$FALLBACK"
+rm -f "$BUILD"/galjs_33.fb* &> /dev/null
+for (( COUNTER=0; COUNTER<5; COUNTER++)); do
+    TEMP="$BUILD/galjs_33.fb$COUNTER"
+    run33 fallback_33 "$FALLBACK" "$TEMP"
+    if cmp -s "$FALLBACK" "$TEMP"; then
+        echo "    files are equal!"
+        break
+    fi
+    FALLBACK="$TEMP"
+done
+cp "$FALLBACK" "$BUILD/galjs_33.atomic"
+
+run33 galpy_33 "$BUILD/galjs_33.atomic" "$BUILD/galjs_33.py"
+cp "$BUILD/galjs_33.py" "$BIN/galjs_33.py"
+echo "galjsbuild complete: $BIN/galjs_33.py"

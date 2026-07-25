@@ -1,0 +1,33 @@
+class A
+{
+    property string Name = 'the name';
+}
+
+class B is A
+{
+    method void Foo [number X, number Y]
+    {
+        say "Foo";
+    }
+}
+
+class set A
+{
+    method void Bar [string S, list L]
+    {
+        say "Bar";
+    }
+}
+
+
+module Classes
+{
+    main
+    {
+        object First = (new A);
+        object Second = (new B);
+        Second.Foo 1 2;
+        list K "one" "two" "three";
+        First.Bar "Hello" K;
+    }
+}

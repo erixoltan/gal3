@@ -1,0 +1,1736 @@
+class set Element
+{
+    property string Python;
+    property integer Python_Precedence 0;
+    method string Python_String
+    {
+        string Py [my Python];
+        forgive
+        {
+            return Py if ([my Data_Type] s= 'string');
+        }
+        return (append 'str(' Py ')');
+    }
+    method string Python_Enquote [string Text]
+    {
+        Text = (i Python_Escape_Content Text);
+        return (i Python_Choose_Quotes Text);
+    }
+    method string Python_Escape_Content [string Text]
+    {
+        if (Text contains '\')
+        {
+            replace Text '\' '\\';
+        }
+        if (Text contains [tab])
+        {
+            replace Text [tab] "\t";
+        }
+        if (Text contains [line])
+        {
+            replace Text [line] "\n";
+        }
+        string CR (Runtime:Chr 13);
+        if (Text contains CR)
+        {
+            replace Text CR "\r";
+        }
+        return Text;
+    }
+    method string Python_Choose_Quotes [string Text]
+    {
+        return (append "'" Text "'" ) if (not (Text contains "'"));
+        return (append '"' Text '"' ) if (not (Text contains '"'));
+        return (append "'''" Text "'''" ) if (not (Text contains "'''"));
+        return (append '"""' Text '"""' ) if (not (Text contains '"""'));
+        replace Text "'" "\'";
+        return (append "'''" Text "'''");
+    }
+    method string Python_Indent [string Text]
+    {
+        return '' if (isnull Text);
+        dictionary Qend;
+        Qend '"' d= '"';
+        Qend "'" d= "'";
+        Qend '`' d= '`';
+        Qend '"""' d= '"""';
+        Qend "'''" d= "'''";
+        integer P;
+        string C;
+        string C3;
+        string I '';
+        flag Quote [false];
+        string Q '';
+        string Between [indent];
+        integer E = ((length Text) - 1);
+        integer Skip = 0;
+        for P range 0 E
+        {
+            C = (substring Text P 1);
+            C3 = (substring Text P 3);
+            append I Between C;
+            Between = '';
+            if (Skip > 0)
+            {
+                decrement Skip;
+            }
+            else if Quote
+            {
+                if (C3 s= Q)
+                {
+                    Quote = [false];
+                    Q = '';
+                    Skip = ((length C3) - 1);
+                }
+                else if (C s= Q)
+                {
+                    Quote = [false];
+                    Q = '';
+                }
+            }
+            else if (C = [line])
+            {
+                Between = [indent];
+            }
+            else if (Qend dexists C3)
+            {
+                Quote = [true];
+                Q = (dget Qend C3);
+            }
+            else if (Qend dexists C)
+            {
+                Quote = [true];
+                Q = (dget Qend C);
+            }
+        }
+        return I;
+    }
+    method void Python_Append_Flatten [object Arg, list Into]
+    {
+        comment `a nested append operation inlines its segments: embedding
+        its finished f-string inside another f-string's braces would nest
+        same-quote f-strings, which python 3.11 rejects`;
+        forgive
+        {
+            object AC [Arg.Classification];
+            if (AC is an Operation_Append)
+            {
+                object M;
+                for each M in [AC.Arguments]
+                {
+                    i Python_Append_Flatten M Into;
+                }
+                return;
+            }
+        }
+        push Into Arg;
+    }
+
+    method string Python_Append [list Raw_Arguments]
+    {
+        list Arguments;
+        object A0;
+        for each A0 in Raw_Arguments
+        {
+            i Python_Append_Flatten A0 Arguments;
+        }
+        return '' if ((llength Arguments) = 0);
+        if ((llength Arguments) = 1)
+        {
+            object Arg (lget Arguments 0);
+            return (Arg.Python_String);
+        }
+        objects Arg Argc;
+        string U;
+        string Code '';
+        flag Embed = [false];
+        for each Arg in Arguments
+        {
+            Argc = [Arg.Classification];
+            if (Argc is a Literal_Syntax)
+            {
+                if (not (defined [Argc.Unquoted]))
+                {
+                    Embed = [true];
+                }
+            }
+            else if (Argc is a Token_Quote)
+            {
+            }
+            else if (Argc is a Token_Number)
+            {
+            }
+            else
+            {
+                Embed = [true];
+            }
+        }
+        comment `literal segments are escaped individually; embedded expression
+        segments are code and must pass through verbatim, so the final quote
+        wrap must not re-escape the assembled body`;
+        for each Arg in Arguments
+        {
+            Argc = [Arg.Classification];
+            if ((Argc is a Literal_Syntax) and (defined [Argc.Unquoted]))
+            {
+                U = (i Python_Escape_Content [Argc.Unquoted]);
+                if Embed
+                {
+                    if (U contains '{')
+                    {
+                        replace U '{' '{{';
+                    }
+                    if (U contains '}')
+                    {
+                        replace U '}' '}}';
+                    }
+                }
+                append Code U;
+            }
+            else if (Argc is a Token_Quote)
+            {
+                U = (i Python_Escape_Content [Argc.Unquoted]);
+                if Embed
+                {
+                    if (U contains '{')
+                    {
+                        replace U '{' '{{';
+                    }
+                    if (U contains '}')
+                    {
+                        replace U '}' '}}';
+                    }
+                }
+                append Code U;
+            }
+            else if (Argc is a Token_Number)
+            {
+                append Code [Argc.Python];
+            }
+            else
+            {
+                append Code '{ ' [Argc.Python] ' }';
+            }
+        }
+        Code = (i Python_Choose_Quotes Code);
+        if Embed
+        {
+            Code = (append "f" Code);
+        }
+        return Code;
+    }
+}
+
+class set Spell
+{
+    method string Python_Arguments [string Separator]
+    {
+        object Arg;
+        string Args_Py '';
+        string Between '';
+        for each Arg in [my Arguments]
+        {
+            if (not (defined [Arg.Python]))
+            {
+                error 'Argument Python not defined: ' [Arg.Gal];
+            }
+            string Arg_Py [Arg.Python];
+            append Args_Py Between Arg_Py;
+            = Between Separator;
+        }
+        return Args_Py;
+    }
+    method string Python_Args [string Separator]
+    {
+        object Arg;
+        string Args_Py '';
+        string Between '';
+        for each Arg in [my Listargs]
+        {
+            if (not (defined [Arg.Python]))
+            {
+                error 'Argument Python not defined: ' [Arg.Gal];
+            }
+            string Arg_Py [Arg.Python];
+            append Args_Py Between Arg_Py;
+            = Between Separator;
+        }
+        return Args_Py;
+    }
+    method void Python_Runtime_Include [object Receiver]
+    {
+        comment `a call through the Runtime class needs its import; nothing
+        else declares it since the gal3 chain emits only dynamic includes`;
+        forgive
+        {
+            if ((Receiver.Get_Input) s= 'Runtime')
+            {
+                object Module (i Get_Module);
+                if (not (Module is null))
+                {
+                    Module.Add_Include 'from Runtime import Runtime';
+                }
+            }
+        }
+    }
+
+    method string Python_Arg_Data_Type [object Arg]
+    {
+        comment `an argument's definitional type lives on its
+        classification, like everything inferred`;
+        forgive
+        {
+            object C [Arg.Classification];
+            string T [C.Data_Type];
+            return '' if (T is an Element);
+            return T;
+        }
+        return '';
+    }
+
+    method integer Python_Arg_Precedence [object Arg]
+    {
+        comment `the precedence table lives on the classification classes,
+        and an argument captured during top-down classification is still the
+        parse element, so the classification must be dereferenced. for an
+        already-classified object the dereference is the identity.`;
+        object C [Arg.Classification];
+        return [C.Python_Precedence];
+    }
+    method string Python_Repeating [string Oper]
+    {
+        object Argument;
+        string Arg;
+        string Code '';
+        flag First [true];
+        for each Argument in [my Arguments]
+        {
+            Arg = [Argument.Python];
+            integer P (i Python_Arg_Precedence Argument);
+            if (P > [my Python_Precedence])
+            {
+                Arg = (append '(' Arg ')');
+            }
+            else if ((P = [my Python_Precedence]) and (not First))
+            {
+                comment `equal precedence is only safe in the leftmost
+                position of a left-associative chain`;
+                Arg = (append '(' Arg ')');
+            }
+            if (Code sgt '')
+            {
+                append Code Oper;
+            }
+            append Code Arg;
+            First = [false];
+        }
+        return Code;
+    }
+    method string Python_Unary_Append [object Op1, string Oper]
+    {
+        string Arg [Op1.Python];
+        if ((i Python_Arg_Precedence Op1) >= [my Python_Precedence])
+        {
+            Arg = (append '(' Arg ')');
+        }
+        string Code Arg Oper;
+        return Code;
+    }
+}
+
+class set Statement
+{
+    method string Python_Block
+    {
+        string Python '';
+        forgive
+        {
+            if (not ([my Block Python] is null))
+            {
+                append Python [my Block Python];
+                return Python;
+            }
+        }
+        return (append ':' [line] [indent] 'pass' [line]);
+    }
+}
+
+class set Operation
+{
+    method string Python_Numeric_Operand [object Op]
+    {
+        comment `a numeric operation converts a string-typed operand:
+        int when the surrounding usage is integer, float otherwise. python
+        would raise a TypeError on the unconverted form. only a definite
+        string type converts - variant and unknown stay untouched.`;
+        string Code [Op.Python];
+        if ((i Python_Arg_Precedence Op) > [my Python_Precedence])
+        {
+            Code = (append '(' Code ')');
+        }
+        if ((i Python_Arg_Data_Type Op) s= 'string')
+        {
+            string Conv 'float';
+            if ([my Usage] s= 'integer')
+            {
+                Conv = 'int';
+            }
+            Code = (append Conv '(' Code ')');
+        }
+        return Code;
+    }
+
+    method string Python_Numeric_Infix [object Op1, object Op2, string Infix]
+    {
+        string Code (i Python_Numeric_Operand Op1);
+        append Code Infix (i Python_Numeric_Operand Op2);
+        return Code;
+    }
+
+    method string Python_Numeric_Repeating [string Oper]
+    {
+        comment `the numeric chain converts string-typed operands the same
+        way Python_Numeric_Operand does, in every position of the chain`;
+        object Argument;
+        string Arg;
+        string Code '';
+        flag First [true];
+        for each Argument in [my Arguments]
+        {
+            Arg = [Argument.Python];
+            integer P (i Python_Arg_Precedence Argument);
+            if (P > [my Python_Precedence])
+            {
+                Arg = (append '(' Arg ')');
+            }
+            else if ((P = [my Python_Precedence]) and (not First))
+            {
+                Arg = (append '(' Arg ')');
+            }
+            if ((i Python_Arg_Data_Type Argument) s= 'string')
+            {
+                string Conv 'float';
+                if ([my Usage] s= 'integer')
+                {
+                    Conv = 'int';
+                }
+                Arg = (append Conv '(' Arg ')');
+            }
+            if (Code sgt '')
+            {
+                append Code Oper;
+            }
+            append Code Arg;
+            First = [false];
+        }
+        return Code;
+    }
+
+    method string Python_Infix [object Op1, object Op2, string Infix]
+    {
+        string Left [Op1.Python];
+        string Right [Op2.Python];
+        if ((i Python_Arg_Precedence Op1) > [my Python_Precedence])
+        {
+            Left = (append '(' Left ')');
+        }
+        if ((i Python_Arg_Precedence Op2) >= [my Python_Precedence])
+        {
+            comment `the right operand needs parentheses at equal precedence
+            too, because infix operators associate left: 10 - (4 - 3)`;
+            Right = (append '(' Right ')');
+        }
+        string Code Left Infix Right;
+        return Code;
+    }
+    method string Python_Unary [object Op1, string Oper]
+    {
+        string Arg [Op1.Python];
+        if ((i Python_Arg_Precedence Op1) >= [my Python_Precedence])
+        {
+            Arg = (append '(' Arg ')');
+        }
+        string Code Oper Arg;
+        return Code;
+    }
+}
+
+class set Syntax
+{
+    property string Unquoted;
+}
+
+
+generator Python Fallback
+{
+    generate Element
+    {
+        todo 'add a python generator for this class';
+        string Class_Name [class name];
+        string Input (i Get_Input);
+        error 'Class ' Class_Name " doesn't implement Infer_Python";
+        comment 'debug;';
+        string Gal [my Gal];
+        string Fallback [my Fallback];
+        todo 'put real logic here instead';
+        string Code Gal;
+        i = Code;
+    }
+    generate Token
+        [my Text];
+
+    generate Token_Quote
+        (i Python_Enquote [my Unquoted]);
+
+    generate Syntax_Tab
+    {
+        my Unquoted = [tab];
+        i = '"\t"';
+    }
+
+    generate Block
+    {
+        string Body '';
+        object Stmt;
+        flag Non_Comment [false];
+        string Between '';
+        for each Stmt in [my Statements]
+        {
+            if ([Stmt.Classification] is not a Comment_Statement)
+            {
+                Non_Comment = [true];
+            }
+            append Body Between [Stmt.Python];
+            Between = [line];
+        }
+        if (not Non_Comment)
+        {
+            append Body Between 'pass';
+        }
+        Body = (i Python_Indent Body);
+        my Python_Statements = Body;
+        string Code ':' [line]
+            Body;
+        i = Code;
+    }
+
+    generate Statement_Say
+        'print(' (i Python_Append [my Arguments]) ')';
+
+    generate Statement_Readline
+    {
+        comment `string literals are prompts, names are input variables: each
+        name reads one line, carrying the prompt gathered since the last read`;
+        string Code '';
+        string Between '';
+        string Prompt '';
+        objects Arg Argc;
+        for each Arg in [my Arguments]
+        {
+            Argc = [Arg.Classification];
+            if (Argc is a Token_Quote)
+            {
+                if (Prompt sgt '')
+                {
+                    append Prompt ' + ';
+                }
+                append Prompt (Arg.Python_String);
+            }
+            else
+            {
+                append Code Between (Arg.Python_String) ' = input(' Prompt ')';
+                Prompt = '';
+                Between = [line];
+            }
+        }
+        i = Code;
+    }
+
+    generate Statement_Main
+    {
+        string Code "if __name__ == '__main__'";
+        if ((llength [my Listargs]) > 0)
+        {
+            object Module (i Get_Module);
+            if (Module is null)
+            {
+                error 'main arguments must be inside a module';
+            }
+            Module.Add_Include 'import sys';
+            integer Sub 0;
+            string Args '';
+            object Argument;
+            for each Argument in [my Listargs]
+            {
+                increment Sub;
+                string Arg_Name [Argument.Python];
+                string Arg_Code [indent 2] Arg_Name ' = sys.argv[' Sub ']' [line];
+                append Args Arg_Code;
+            }
+            append Code ':' [line]
+                [indent] 'try:' [line]
+                    Args
+                [indent] 'except:' [line]
+                    [indent 2] 'print("Usage: ", sys.argv[0], "' (i Python_Args ' ') '")' [line]
+                    [indent 2] 'sys.exit()' [line];
+            append Code [my Block Python_Statements];
+        }
+        else
+        {
+            append Code (i Python_Block);
+        }
+        i = Code;
+    }
+
+    generate Statement_Module
+    {
+        string Code "# module: " [my Name Python] [line];
+        string Include;
+        dictionary Exclude;
+        for each Include in [my Includes]
+        {
+            continue if (dict Exclude exists Include);
+            append Code Include [line];
+            Exclude Include d= [true];
+        }
+        object Stmt;
+        for each Stmt in [my Block Statements]
+        {
+            append Code [Stmt.Python] [line];
+        }
+        i = Code;
+    }
+
+    generate Program
+    {
+        string Code "";
+        string Stmt_Py;
+        object Stmt;
+        for each Stmt in [my Statements]
+        {
+            append Code [Stmt.Python] [line];
+        }
+        i = Code;
+    }
+
+    generate Statement_Append
+        Variable ' += '
+            (i Python_Append [my Listargs]);
+    generate Statement_String
+    {
+        string Name [my Name Python];
+        string Code Name ' = ';
+        if ((llength [my Listargs]) > 0)
+        {
+            append Code (i Python_Append [my Listargs]);
+        }
+        else
+        {
+            append Code "''";
+
+        }
+        i = Code;
+    }
+
+    generate Declaration_Statement
+    {
+        string Name [my Name Python];
+        string Code "# " [my Keyword] " " Name;
+        defined [my Value]
+        {
+            Code = (append Name ' = ' [my Value Python]);
+        }
+        i = Code;
+    }
+    generate Declarations_Statement
+    {
+        object Arg;
+        string Code '';
+        string Between '';
+        for each Arg in [my Arguments]
+        {
+            append Code Between [Arg.Python] ' = None';
+            Between = [line];
+        }
+        i = Code;
+    }
+
+    generate Statement_If
+        "if " Condition (i Python_Block);
+
+    generate Statement_Else_If
+        "elif " Condition (i Python_Block);
+
+    generate Statement_Else
+        "else" Block;
+
+    generate Statement_Try
+        "try" Block;
+
+    generate Statement_Catch
+    {
+        string Code 'except Exception';
+        defined [my Error]
+        {
+            append Code ' as ' [my Error Python];
+        }
+        append Code [my Block Python];
+        i = Code;
+    }
+
+    generate Syntax_Null
+    {
+        my Unquoted = '';
+        i = 'None';
+    }
+
+    generate Syntax_True
+    {
+        my Unquoted = '1';
+        i = 'True';
+    }
+
+    generate Syntax_False
+    {
+        my Unquoted = '0';
+        i = 'False';
+    }
+
+    generate Syntax_Self
+        'self';
+
+    generate Syntax_Class_Name
+    {
+        string Object_Code 'self';
+        if (defined [my Object])
+        {
+            Object_Code = [my Object Python];
+        }
+        string Code
+            Object_Code
+            '.__class__.__name__';
+        i = Code;
+    }
+
+    generate Operation_New
+        Class_Name '(' (i Python_Args ', ') ')';
+
+    generate Statement_Call
+    {
+        i Python_Runtime_Include [my Object];
+        string Code [my Object Python] '.' [my Method Python] '(' (i Python_Args ', ') ')';
+        i = Code;
+    }
+
+    generate Statement_Propset
+        Object '.' Property ' = ' Value;
+
+    generate Operation_Call
+    {
+        i Python_Runtime_Include [my Object];
+        string Code [my Object Python] '.' [my Method Python] '(' (i Python_Args ', ') ')';
+        i = Code;
+    }
+
+    generate Statement_List_Split
+        Variable ' = '
+        String '.split('
+        Delimiter ')';
+
+    generate Statement_I
+        'self.' Method '(' (i Python_Args ', ') ')';
+
+    generate Operation_I
+        'self.' Method '(' (i Python_Args ', ') ')';
+
+    generate Argument_Syntax
+    {
+        string Code [my Variable Python];
+        if (defined [my Default_Value])
+        {
+            append Code '=' [my Default_Value Python];
+        }
+        i= Code;
+    }
+    generate Operation_Add
+        (i Python_Numeric_Infix [my Op1] [my Op2] ' + ');
+    generate Operation_Minus
+    {
+        string Code;
+        if ((llength [my Arguments]) = 1)
+        {
+            Code = (i Python_Unary [my Op1] '-');
+        }
+        else
+        {
+            Code = (i Python_Numeric_Repeating ' - ');
+        }
+        i = Code;
+    }
+    generate Statement_Return
+    {
+        string Code 'return';
+        if (defined [my Value])
+        {
+            append Code ' ' [my Value Python];
+        }
+        i = Code;
+    }
+    generate Statement_Return_If
+    {
+        string Condition [my Condition Python];
+        string Code 'if ' Condition ': return';
+        if [my Value]
+        {
+            append Code ' ' [my Value Python];
+        }
+        i = Code;
+    }
+    generate Statement_If_Return
+    {
+        string Condition [my Condition Python];
+        string Code 'if ' Condition ': return';
+        if [my Value]
+        {
+            append Code ' ' [my Value Python];
+        }
+        i = Code;
+    }
+    generate Syntax_My
+        'self.' (i Python_Arguments '.');
+
+    generate Statement_Method
+    {
+        string Code 'def ' [my Name Python] '(self';
+        string Args (i Python_Args ', ');
+        if (Args sgt '')
+        {
+            append Code ', ' Args;
+        }
+        append Code ')' (i Python_Block);
+        i = Code;
+    }
+
+    generate Statement_Class
+    {
+        string Constructor '';
+        string Class_Properties '';
+        string Class_Methods '';
+        string Propinit '';
+        string Methods '';
+        objects S C;
+        for each S in [my Block Statements]
+        {
+            C = [S.Classification];
+            if (C is a Statement_Constructor)
+            {
+                append Constructor [S.Python] [line];
+            }
+            else if (C is a Statement_Class_Property)
+            {
+                append Class_Properties [C.Python] [line];
+            }
+            else if (C is a Statement_Class_Method)
+            {
+                append Class_Methods [C.Python] [line];
+            }
+            else if (C is a Statement_Property)
+            {
+                append Propinit [C.Python] [line];
+            }
+            else if (C is a Statement_Method)
+            {
+                append Methods [C.Python] [line];
+            }
+            else if (C is a Statement_Comment)
+            {
+                append Methods [C.Python] [line];
+            }
+            else
+            {
+                debug;
+            }
+        }
+        if (Constructor seq '')
+        {
+            if (Propinit sgt '')
+            {
+                Propinit = (i Python_Indent Propinit);
+                append Constructor 'def __init__(self):' [line];
+                if (defined [my Ancestor])
+                {
+                    append Constructor [indent] 'super().__init__()' [line];
+                }
+                append Constructor Propinit;
+            }
+        }
+        else
+        {
+            replace Constructor '{[(propinit)]}' (i Python_Indent Propinit);
+        }
+        string Class_Body
+            Constructor
+            Class_Properties
+            Class_Methods
+            Methods;
+        if (Class_Body seq '')
+        {
+            if (defined [my Ancestor])
+            {
+                Class_Body = 'pass';
+            }
+            else
+            {
+                comment `an ancestor-less bodyless class is the universal Base of a
+                standalone program: its constructor must absorb whatever arguments
+                descendant constructors chain up, as gal's real Base and the
+                JavaScript default constructor both do`;
+                Class_Body = 'def __init__(self, *Args):';
+                append Class_Body [line] [indent] 'pass';
+            }
+        }
+        string Code 'class ' [my Class_Name Python];
+        if (defined [my Ancestor])
+        {
+            append Code '(' [my Ancestor Python] ')';
+        }
+        append Code ':' [line]
+            (i Python_Indent Class_Body);
+        i = Code;
+    }
+    generate Syntax_List
+        Variable;
+    generate Syntax_Dictionary
+        Variable;
+    generate Statement_List
+    {
+        string Code [my Name Python] ' = [' (i Python_Args ', ') ']';
+        i = Code;
+    }
+    generate Statement_Global_List
+        [my Name Python] ' = []';
+    generate Statement_Dictionary
+        [my Name Python] ' = {}';
+    generate Property_Statement
+    {
+        string Type [my Type Python];
+        string Name [my Name Python];
+        string Value 'None';
+        if (Type s= 'list')
+        {
+            Value = '[]';
+        }
+        else if ((substring Type 0 4) s= 'dict')
+        {
+            Value = '{}';
+        }
+        forgive
+        {
+            Value = [my Value Python];
+        }
+        string Code 'self.' Name ' = ' Value ' # ' Type;
+        i = Code;
+    }
+    generate Statement_Class_Property
+    {
+        string Type [my Type Python];
+        string Name [my Name Python];
+        string Value 'None';
+        if (Type s= 'list')
+        {
+            Value = '[]';
+        }
+        else if ((substring Type 0 4) s= 'dict')
+        {
+            Value = '{}';
+        }
+        forgive
+        {
+            Value = [my Value Python];
+        }
+        string Code Name ' = ' Value ' # class property ' Type;
+        i = Code;
+    }
+    generate Statement_Constructor
+    {
+        string Code 'def __init__(self';
+        string Args (i Python_Args ', ');
+        if (Args s> '')
+        {
+            append Code ', ' Args;
+        }
+        append Code '):' [line];
+        comment `an ancestor-less class gets no super call; a derived class
+        passes nothing to the parent constructor unless the body opens with
+        an explicit super statement, which then renders in place`;
+        object Cls = (i Get_Owner_Class);
+        string Has_Ancestor '';
+        forgive
+        {
+            comment `the dereference throws when Ancestor is unset (missing
+            attribute or null), under gal2- and gal3-built binaries alike`;
+            string Probe ([Cls.Ancestor].Get_Input);
+            Has_Ancestor = 'y';
+        }
+        string Explicit '';
+        string Misplaced '';
+        integer N 0;
+        object S;
+        forgive
+        {
+            for each S in [my Block Statements]
+            {
+                if ([S.Classification] is a Statement_Super)
+                {
+                    if (N > 0)
+                    {
+                        Misplaced = 'y';
+                    }
+                    Explicit = 'y';
+                }
+                increment N;
+            }
+        }
+        if (Misplaced sgt '')
+        {
+            comment `raised outside the forgive above, which would eat it`;
+            error 'super must be the first statement of the constructor';
+        }
+        if ((Has_Ancestor sgt '') and (Explicit seq ''))
+        {
+            append Code [indent] 'super().__init__()' [line];
+        }
+        append Code '{[(propinit)]}';
+        try
+        {
+            append Code [my Block Python_Statements];
+        }
+        catch
+        {
+            append Code [indent] 'pass';
+        }
+        i = Code;
+    }
+    generate Statement_Super
+        'super().__init__(' (i Python_Args ', ') ')';
+    generate Syntax_Is
+        '(' Class_Name ')';
+    generate Statement_My_Equal
+        'self.' Property_Name ' = ' Value;
+    generate Operation_Defined
+        Variable ' is not None';
+    generate Statement_Forgive
+        'try' (i Python_Block)
+        [line] 'except Exception: pass';
+    generate Statement_For_Each
+        'for ' Item ' in ' List
+            (i Python_Block);
+    generate Statement_For_Each_In
+        'for ' Item ' in ' List
+            (i Python_Block);
+    generate Operation_Substring
+    {
+        string SVal [my String_Value Python];
+        string Start [my Start_Index Python];
+        string Code;
+        if (defined [my Length])
+        {
+            string Len [my Length Python];
+            if (Len s= '1')
+            {
+                Code = (append SVal '[' Start ']');
+            }
+            else
+            {
+                Code = (append SVal '[' Start ':(' Start ')+(' Len ')]');
+            }
+        }
+        else
+        {
+            Code = (append SVal '[' Start ':]');
+        }
+        i = Code;
+    }
+    generate Operation_Is_Null
+        '(' Op1 ' in (None, ""))';
+    generate Operation_Not_Null
+        '(' Op1 ' not in (None, ""))';
+    generate Statement_Dictionary_Assign
+        Dict '[' Subscript '] = ' Value;
+    generate Declaration_Statement
+    {
+        string Variable [my Name Python];
+        string Value 'None';
+        forgive
+        {
+            Value = [my Value Python];
+        }
+        string Code Variable ' = ' Value;
+        i = Code;
+    }
+    generate Operation_Length
+        'len(' ([my First].Python_String) ')';
+    generate Statement_Assign
+        Destination ' = ' Value;
+    generate Operation_String_Equal
+        ([my Op1].Python_String) ' == ' ([my Op2].Python_String);
+    generate Operation_Equal
+        (i Python_Infix [my Op1] [my Op2] ' == ');
+    generate Operation_Not_Equal
+    {
+        string Oper ' != ';
+        if ([my Op2 Python] s= 'None')
+        {
+            Oper = ' is not ';
+        }
+        string Code (i Python_Infix [my Op1] [my Op2] Oper);
+        i = Code;
+    }
+    generate Operation_Contains
+        (i Python_Infix [my Search] [my String] ' in ');
+    generate Operation_Not
+        (i Python_Unary [my Op1] 'not ');
+    generate Syntax_Indent
+    {
+        string Code "'    '";
+        my Unquoted = '    ';
+        defined [my Count]
+        {
+            string Count [my Count Python];
+            if ([my Count Python_Precedence] > 5)
+            {
+                Count = (append '(' Count ')');
+            }
+            my Python_Precedence = 5;
+            append Code ' * ' Count;
+            my Unquoted = [null];
+        }
+        i = Code;
+    }
+    generate Syntax_Line
+    {
+        string Code "'\n'";
+        my Unquoted = [line];
+        defined [my Count]
+        {
+            string Count [my Count Python];
+            if ([my Count Python_Precedence] > 5)
+            {
+                Count = (append '(' Count ')');
+            }
+            my Python_Precedence = 5;
+            append Code ' * ' Count;
+            my Unquoted = [null];
+        }
+        i = Code;
+    }
+    generate Syntax_Return
+    {
+        string Code "'\r'";
+        comment `the unquoted text must hold the real carriage return
+        character, like line and tab do; gal literals never process
+        escapes, so the two-character form poisoned appends`;
+        my Unquoted = (Runtime:Chr 13);
+        defined [my Count]
+        {
+            string Count [my Count Python];
+            if ([my Count Python_Precedence] > 5)
+            {
+                Count = (append '(' Count ')');
+            }
+            my Python_Precedence = 5;
+            append Code ' * ' Count;
+            my Unquoted = [null];
+        }
+        i = Code;
+    }
+    generate Syntax_Tab
+    {
+        string Code "'\t'";
+        my Unquoted = [tab];
+        defined [my Count]
+        {
+            string Count [my Count Python];
+            if ([my Count Python_Precedence] > 5)
+            {
+                Count = (append '(' Count ')');
+            }
+            my Python_Precedence = 5;
+            append Code ' * ' Count;
+            my Unquoted = [null];
+        }
+        i = Code;
+    }
+    generate Operation_Dict_Get
+        Dictionary '.get(' Key ')';
+    generate Statement_For_Range
+    {
+        string Variable [my Variable Python];
+        string Start [my Start Python];
+        string End [my End Python];
+        string Range 'range(' Start ',' End '+1';
+        defined [my Increment]
+        {
+            append Range ',' [my Increment Python];
+        }
+        append Range ')';
+        string Code 'for ' Variable ' in ' Range (i Python_Block);
+        i = Code;
+    }
+    generate Operation_Append
+    {
+        comment `nested appends flatten into one segment list, literal
+        segments escape individually, and the final quote wrap must not
+        re-escape the assembled body - embedded expressions are code. the
+        old form re-enquoted everything, so each nesting level added an
+        escape layer.`;
+        list Flat;
+        object A0;
+        for each A0 in [my Arguments]
+        {
+            i Python_Append_Flatten A0 Flat;
+        }
+        string U;
+        string Code '';
+        object Argument;
+        object Argc;
+        for each Argument in Flat
+        {
+            Argc = [Argument.Classification];
+            if ((Argc is a Literal_Syntax) and (defined [Argc.Unquoted]))
+            {
+                U = (i Python_Escape_Content [Argc.Unquoted]);
+                if (U contains '{')
+                {
+                    replace U '{' '{{';
+                }
+                if (U contains '}')
+                {
+                    replace U '}' '}}';
+                }
+                append Code U;
+            }
+            else if (Argc is a Token_Quote)
+            {
+                U = (i Python_Escape_Content [Argc.Unquoted]);
+                if (U contains '{')
+                {
+                    replace U '{' '{{';
+                }
+                if (U contains '}')
+                {
+                    replace U '}' '}}';
+                }
+                append Code U;
+            }
+            else if (Argc is a Token_Number)
+            {
+                append Code [Argc.Python];
+            }
+            else
+            {
+                append Code '{ ' [Argc.Python] ' }';
+            }
+        }
+        Code = (append 'f' (i Python_Choose_Quotes Code));
+        i = Code;
+    }
+    generate Operation_And
+    {
+        string Code (i Python_Infix [my Op1] [my Op2] ' and ');
+        object Extra;
+        string Extra_Text;
+        for each Extra in [my Listargs]
+        {
+            comment `chained operands: leftover operator keyword tokens alternate with the expressions beyond Op1 and Op2`;
+            Extra_Text = '';
+            if (Extra is a Token)
+            {
+                Extra_Text = [Extra.Text];
+            }
+            if ((Extra_Text s= 'and') or (Extra_Text s= '&'))
+            {
+                append Code ' and ';
+            }
+            else
+            {
+                append Code [Extra.Python];
+            }
+        }
+        i = Code;
+    }
+    generate Statement_Comment
+    {
+        string Text '';
+        object Argument;
+        for each Argument in [my Arguments]
+        {
+            if (Argument is a Token_Quote)
+            {
+                append Text [Argument.Unquoted];
+            }
+            else
+            {
+                string Piece (Argument.Get_Input);
+                forgive
+                {
+                    comment `a bracketed literal like [line] carries its real
+                    character in the classification's Unquoted property`;
+                    object AC [Argument.Classification];
+                    if ((AC is a Literal_Syntax) and (defined [AC.Unquoted]))
+                    {
+                        Piece = [AC.Unquoted];
+                    }
+                }
+                append Text Piece;
+            }
+        }
+        # 'quote openers would poison Element.Indent quote tracking downstream, replace with closing homoglyphs';
+        replace Text "'" '’';
+        replace Text '"' '”';
+        replace Text '`' '’';
+        replace Text '“' '”';
+        replace Text '‘' '’';
+        replace Text '«' '»';
+        replace Text '‹' '›';
+        string Code '';
+        lsplit Lines Text [line];
+        for each Text in Lines
+        {
+            if (Code sgt '')
+            {
+                append Code [line];
+            }
+            append Code '# ' Text;
+        }
+        i = Code;
+    }
+    generate Operation_Is_Ident
+        Character ' in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_0123456789"';
+    generate Operation_Is_Whitespace
+        Character ' in " \n\r\t"';
+    generate Operation_Is_Upper
+        [my First Python] '.isupper()';
+    generate Operation_Is_Lower
+        [my First Python] '.islower()';
+    generate Operation_Is_Numeric
+        'isinstance(' Character ', (int, float, complex))';
+    generate Operation_Is_Punctuation
+    {
+        object Module (i Get_Module);
+        if (Module is null)
+        {
+            error 'is punctuation operation must be inside a module';
+        }
+        Module.Add_Include 'import string';
+        string Code [my Character Python] ' in string.punctuation';
+        i = Code;
+    }
+    generate Syntax_Property
+        (i Python_Repeating '.');
+
+    generate Operation_Is_A
+    {
+        string Args (i Python_Args ', ');
+        if ((llength [my Listargs]) > 1)
+        {
+            Args = (append '(' Args ')');
+        }
+        string Code
+            'isinstance('
+            [my Object Python]
+            ', '
+            Args
+            ')';
+        i = Code;
+    }
+    generate Operation_Is_Not_A
+    {
+        string Args (i Python_Args ', ');
+        if ((llength [my Listargs]) > 1)
+        {
+            Args = (append '(' Args ')');
+        }
+        string Code
+            'not isinstance('
+            [my Object Python]
+            ', '
+            Args
+            ')';
+        i = Code;
+    }
+    generate Statement_Debug
+        'import pdebug; pdebug.zbreak()';
+    generate Statement_Class_Method
+    {
+        string Code '@classmethod' [line] 'def ' [my Name Python] '(cls';
+        string Args (i Python_Args ', ');
+        if (Args s> '')
+        {
+            append Code ', ' Args;
+        }
+        append Code ')' (i Python_Block);
+        i = Code;
+    }
+    generate Operation_Or
+    {
+        string Code (i Python_Infix [my Op1] [my Op2] ' or ');
+        object Extra;
+        string Extra_Text;
+        for each Extra in [my Listargs]
+        {
+            comment `chained operands: leftover operator keyword tokens alternate with the expressions beyond Op1 and Op2`;
+            Extra_Text = '';
+            if (Extra is a Token)
+            {
+                Extra_Text = [Extra.Text];
+            }
+            if ((Extra_Text s= 'or') or (Extra_Text s= '|'))
+            {
+                append Code ' or ';
+            }
+            else
+            {
+                append Code [Extra.Python];
+            }
+        }
+        i = Code;
+    }
+    generate Statement_Push
+    {
+        string List [my List Python];
+        string Args (i Python_Args ', ');
+        if (llength [my Listargs] > 1)
+        {
+            Args = (append '[' Args ']');
+        }
+        string Code 
+            List '.extend(' Args ')';
+        i = Code;
+    }
+    generate Statement_Undefined
+    {
+        string Ifargs "";
+        object Argument;
+        for each Argument in [my Arguments]
+        {
+            append Ifargs "if " [Argument.Python] ' is None:' [line]
+                [indent] 'raise ValueError' [line];
+        }
+        Ifargs = (i Python_Indent Ifargs);
+        string Block (i Python_Block);
+        string Code "try:" [line] Ifargs;
+        append Code "except (ValueError, AttributeError)" Block;
+        i = Code;
+    }
+    generate Syntax_My_Class
+        'self.__class__';
+    generate Statement_Continue
+        'continue';
+    generate Statement_List_Copy
+    {
+        string Variable [my Target Python];
+        string Value '[]';
+        defined [my Source]
+        {
+            Value = (append [my Source Python] '.copy()');
+        }
+        string Code Variable ' = ' Value;
+        i = Code;
+    }
+    generate Operation_Pop
+        List '.pop()';
+    generate Statement_Defined
+    {
+        string Ifargs "";
+        object Argument;
+        for each Argument in [my Arguments]
+        {
+            append Ifargs "if " [Argument.Python] ' is None:' [line]
+                [indent] 'raise ValueError' [line];
+        }
+        Ifargs = (i Python_Indent Ifargs);
+        string Block '';
+        forgive
+        {
+            Block = [my Block Python_Statements];
+        }
+        string Code "try:" [line]
+            Ifargs
+            Block;
+        append Code [line] "except (ValueError, AttributeError):" [line] [indent] 'pass';
+        i = Code;
+    }
+    generate Statement_Join
+        Variable ' = ' Delimiter '.join(' List ')';
+    generate Operation_Split
+        [my String Python] '.split(' [my Delimiter Python] ')';
+    generate Operation_String_Not_Equal
+        ([my Op1].Python_String) ' != ' ([my Op2].Python_String);
+    generate Operation_String_Greater
+        ([my Op1].Python_String) ' > ' ([my Op2].Python_String);
+    generate Operation_String_Greater_Equal
+        ([my Op1].Python_String) ' >= ' ([my Op2].Python_String);
+    generate Operation_String_Less
+        ([my Op1].Python_String) ' < ' ([my Op2].Python_String);
+    generate Operation_String_Less_Equal
+        ([my Op1].Python_String) ' <= ' ([my Op2].Python_String);
+    generate Operation_Join
+        Separator '.join(' List ')';
+    generate Operation_List_Length
+        'len(' List ')';
+    generate Operation_Greater
+        (i Python_Infix [my Op1] [my Op2] ' > ');
+    generate Operation_Greater_Equal
+        (i Python_Infix [my Op1] [my Op2] ' >= ');
+    generate Operation_Less
+        (i Python_Infix [my Op1] [my Op2] ' < ');
+    generate Operation_Less_Equal
+        (i Python_Infix [my Op1] [my Op2] ' <= ');
+    generate Operation_Dict_Exists
+        (i Python_Infix [my Key] [my Dictionary] ' in ');
+    generate Operation_List_Get
+        List '[' Offset ']';
+    generate Operation_Shift
+        List '.pop(0)';
+    generate Operation_String
+        ([my Op1].Python_String);
+    generate Statement_Iterate
+        'for ' Key_Variable ', ' Value_Variable ' in ' Dictionary '.items()' (i Python_Block);
+    generate Syntax_Colon
+        (i Python_Arguments '.');
+    generate Statement_Error
+        'raise Exception(' (i Python_Append [my Arguments]) ')';
+    generate Statement_Increment
+        (i Python_Unary_Append [my Destination] ' += 1');
+    generate Statement_Decrement
+        (i Python_Unary_Append [my Destination] ' -= 1');
+    generate Statement_Colon
+    {
+        i Python_Runtime_Include [my Class_Name];
+        string Code [my Class_Name Python] '.' [my Method_Name Python] '(' (i Python_Args ', ') ')';
+        i = Code;
+    }
+    generate Operation_Colon
+    {
+        i Python_Runtime_Include [my Class];
+        string Code [my Class Python] '.' [my Method Python] '(' (i Python_Args ', ') ')';
+        i = Code;
+    }
+    generate Operation_List_Last
+        List '[-1]';
+    generate Operation_Modulo
+        (i Python_Numeric_Infix [my Op1] [my Op2] ' % ');
+    generate Operation_Multiply
+        (i Python_Numeric_Infix [my Op1] [my Op2] ' * ');
+    generate Operation_Divide
+        (i Python_Numeric_Infix [my Op1] [my Op2] ' / ');
+    generate Operation_Python_Len
+        'len(' [my Op1 Python] ')';
+    generate Operation_Python_In
+        (i Python_Infix [my Op1] [my Op2] ' in ');
+    generate Operation_Python_Is
+        (i Python_Infix [my Op1] [my Op2] ' is ');
+    generate Operation_Python_Is_Not
+        (i Python_Infix [my Op1] [my Op2] ' is not ');
+    generate Operation_Python_Subscript
+        [my Op1 Python] '[' [my Op2 Python] ']';
+    generate Operation_Python_Slice
+        [my Op1 Python] '[' [my Op2 Python] ':' [my Op3 Python] ']';
+    generate Operation_Python_List_Literal
+    {
+        string Code '[';
+        string Between '';
+        object Arg;
+        for each Arg in [my Arguments]
+        {
+            append Code Between [Arg.Python];
+            Between = ', ';
+        }
+        append Code ']';
+        i = Code;
+    }
+    generate Operation_Python_Tuple_Literal
+    {
+        string Code '(';
+        string Between '';
+        integer N 0;
+        object Arg;
+        for each Arg in [my Arguments]
+        {
+            append Code Between [Arg.Python];
+            Between = ', ';
+            increment N;
+        }
+        if (N = 1)
+        {
+            append Code ',';
+        }
+        append Code ')';
+        i = Code;
+    }
+    generate Operation_Python_Dict_Literal
+    {
+        comment 'only the empty dictionary literal is supported so far';
+        i = '{}';
+    }
+    generate Statement_Python_Setitem
+        [my Target Python] '[' [my Key Python] '] = ' [my Value Python];
+    generate Syntax_Our
+        'cls.' (i Python_Arguments '.');
+    generate Statement_Break
+        'break';
+    generate Statement_Forever
+        'while True' (i Python_Block);
+    generate Operation_File_Exists
+    {
+        object Module (i Get_Module);
+        if (Module is null)
+        {
+            error 'file exists operation must be inside a module';
+        }
+        Module.Add_Include 'import os';
+        string Path [my Path Python];
+        string Code 'os.path.exists(' Path ')';
+        i = Code;
+    }
+    generate Statement_File_Read
+        "with open(" File_Name ", 'r', encoding='utf-8') as _file:" [line] [indent]
+             Variable " = _file.read()";
+    generate Statement_Shell_Capture
+    {
+        object Module (i Get_Module);
+        if (Module is null)
+        {
+            error 'shell capture must be inside a module';
+        }
+        Module.Add_Include 'import subprocess';
+        string Code [my Variable Python]
+            ' = (lambda _r: {"stdout": _r.stdout, "stderr": _r.stderr, "exit_code": _r.returncode})'
+            '(subprocess.run(' [my Command Python] ', shell=True, capture_output=True, text=True, timeout=120))';
+        i = Code;
+    }
+    generate Statement_Add
+        Destination ' += ' Increment;
+    generate Statement_Replace
+        Variable ' = ' Variable '.replace(' Search_Text ', ' Replace_Text ')';
+    generate Statement_Lists
+    {
+        string Code '';
+        string Between '';
+        object Arg;
+        for each Arg in [my Arguments]
+        {
+            append Code Between [Arg.Python] ' = []';
+            Between = [line];
+        }
+        i = Code;
+    }
+    generate Statement_Dictionaries
+    {
+        string Code '';
+        string Between '';
+        object Arg;
+        for each Arg in [my Arguments]
+        {
+            append Code Between [Arg.Python] ' = {}';
+            Between = [line];
+        }
+        i = Code;
+    }
+    generate Statement_Strings
+    {
+        string Code '';
+        string Between '';
+        object Arg;
+        for each Arg in [my Arguments]
+        {
+            append Code Between [Arg.Python] ' = ""';
+            Between = [line];
+        }
+        i = Code;
+    }
+    generate Statement_Write_To
+        "with open(" File ", 'w', encoding='utf-8') as _file:" [line] [indent]
+            '_file.write(' Text ')';
+    generate Statement_List_Clear
+        List '.clear()';
+}
+
+class Python_Compiler is Fallback_Compiler
+{
+    constructor
+    {
+        my Generator = (new Python_Generator [self]);
+    }
+
+    method void Print_Errors
+    {
+        object E;
+        for each E in [my Elements]
+        {
+            if (not ([E.Error] is null))
+            {
+                say [line] 
+                    [class name [E.Classification]] 
+                    ': ' 
+                    (substring (E.Get_Input) 0 80);
+                say "ERROR: " [E.Error];
+            }
+        }
+    }
+    method number Infer_Code
+    {
+        verbosity;
+        verbose "Python_Compiler.Infer_Code: starting code generation";
+        number Status 1;
+
+        [my Generator Elements] = [my Elements];
+        Status = ([my Generator].Infer_Gal);
+        if (not Status)
+        {
+            i Print_Errors;
+            say "Error in Python Inference, inferring gal";
+            return 0;
+        }
+        Status = ([my Generator].Infer_Fallback);
+        if (not Status)
+        {
+            i Print_Errors;
+            say "Error in Python Inference, inferring fallback";
+            return 0;
+        }
+
+        verbose "Python_Compiler.Infer_Code: calling Generator.Infer_Python";
+
+        # 'Call Infer_Python to generate the code';
+        [my Generator].Infer_Python;
+
+        # 'Get the top-level program element';
+        object Top = (llast [my Elements]);
+
+        verbose "Python_Compiler.Infer_Code: ensuring Top element has python code";
+
+        verbose (Top.To_String);
+        try
+        {
+            if ([Top.Python] is null)
+            {
+                Top.Infer_Python;
+            }
+        }
+        catch Error
+        {
+            i Print_Errors;
+            say "Error in Python Inference, inferring python";
+            return 0;
+        }
+
+        string Code = [Top.Python];
+        my Python = Code;
+
+        verbose "Python_Compiler.Infer_Code: successfully generated python code";
+
+        return 1;
+    }
+}

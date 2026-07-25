@@ -1,0 +1,16 @@
+class append Element
+{
+    method number Infer_Intelligence
+    {
+        verbosity [true];
+        string Target_Language 'python';
+        string Class_Name [class name];
+        string Input (i Get_Input);
+        string Report (i To_String);
+        verbose 'calling LLM COMPILE';
+        comment `string Response (llm compile Target_Language Input Report);`;
+        comment `verbose 'got python: ' Response;`;
+        comment `my Python = Response;`;
+        return 1;
+    }
+}

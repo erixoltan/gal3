@@ -1,0 +1,23 @@
+flowerbox 'python to gal translator main: parse python source and write the gal3 program';
+main [string Source_File, string Target_File]
+{
+    verbosity;
+    verbose 'python to gal translator';
+    verbose 'input file: ' Source_File;
+    object C = (new Pygal_Compiler);
+    C.File_Name = Source_File;
+    number Result = (C.Translate);
+    if (Result > 0)
+    {
+        write [C.Gal3] to Target_File;
+        say 'pygal OK, gal3 program written to ' Target_File;
+    }
+    else
+    {
+        if ((llength [C.Elements]) > 0)
+        {
+            write (C.Element_Report) to (Target_File s+ '.elems');
+        }
+        say 'pygal FAILED';
+    }
+}

@@ -1,0 +1,489 @@
+flower box 'the Documentation dialect, as a compiler plugin. an article about
+gal is written as a gal program in this dialect. the compiler parses the
+article, RUNS its demo session for real (file statements write files, bash
+statements run through a shell, and the captured output is the only output
+ever published), and infers the markdown article and the booktok video
+script directly on the element tree: each statement carries its own
+Markdown and Script, computed bottom-up by Infer_Markdown and Infer_Script
+after Doc_Execute has captured reality. stated expectations are diffed
+against reality and drift is reported per element. this file is a bare
+statement list: it is spliced into module Compiler by the include statement
+(see gal_compiler_plugins.txt), and documentation_main.txt is the tool that
+selects Dialect_Documentation and drives the passes.';
+class Doc_Support
+{
+    class method string Doc_Pounds [integer Level]
+    {
+        return (substring '####################' 0 Level);
+    }
+    class method string Trim_End [string Text]
+    {
+        integer L = (length Text);
+        string C;
+        forever
+        {
+            break if (L <= 0);
+            C = (substring Text (L - 1) 1);
+            break if (not ((C s= ' ') or (C s= [line]) or (C s= [tab])));
+            decrement L;
+        }
+        return (substring Text 0 L);
+    }
+    class method string Fence_Lang [string File_Name]
+    {
+        comment `the fence language for a demo file, from its extension.
+        gal sources are named .txt to suppress editor highlighting, so txt
+        maps to gal. unknown extensions fall back to the plain fence.`;
+        string Ext '';
+        string C;
+        integer P = 0;
+        integer L = (length File_Name);
+        forever
+        {
+            break if (P >= L);
+            C = (substring File_Name P 1);
+            if (C s= '.')
+            {
+                Ext = '';
+            }
+            else
+            {
+                append Ext C;
+            }
+            increment P;
+        }
+        return 'python' if (Ext s= 'py');
+        return 'js' if (Ext s= 'js');
+        return 'c' if (Ext s= 'c');
+        return 'go' if (Ext s= 'go');
+        return 'java' if (Ext s= 'java');
+        return 'gal' if (Ext s= 'gal');
+        return 'gal' if (Ext s= 'txt');
+        return 'fallback';
+    }
+    class method string Map_Command [string Command]
+    {
+        comment `demo commands name gal tools the way a reader would type
+        them; the session directory holds the actual tool binaries, so the
+        tool name maps to python3 running the local .py file.`;
+        list Tools;
+        push Tools 'gal';
+        push Tools 'fallback';
+        push Tools 'galpy';
+        push Tools 'galjs';
+        push Tools 'galgo';
+        push Tools 'galjava';
+        push Tools 'galcpp';
+        push Tools 'galc';
+        push Tools 'peg';
+        push Tools 'pygal';
+        push Tools 'pygen';
+        push Tools 'pylex';
+        push Tools 'pyparse';
+        string T;
+        string P;
+        integer PL;
+        integer CL = (length Command);
+        for each T in Tools
+        {
+            P = (append T ' ');
+            PL = (length P);
+            continue if (CL < PL);
+            if ((substring Command 0 PL) s= P)
+            {
+                string Rest (substring Command PL (CL - PL));
+                string Mapped 'python3 ' T '.py ' Rest;
+                return Mapped;
+            }
+        }
+        if (CL >= 7)
+        {
+            if ((substring Command 0 7) s= 'python ')
+            {
+                string Rest2 (substring Command 7 (CL - 7));
+                string Mapped2 'python3 ' Rest2;
+                return Mapped2;
+            }
+        }
+        return Command;
+    }
+}
+class Heading_Statement is Scoped_Statement
+{
+    property string Markdown = '';
+    property string Script = '';
+    method void Doc_Execute
+    {
+        comment 'headings take no demo action';
+    }
+    method integer Markdown_Level
+    {
+        comment 'headings only ever nest inside other headings, so the
+        parent chain of a heading contains nothing else; the root heading
+        has no parent and is level one.';
+        forgive
+        {
+            return (([my Parent].Markdown_Level) + 1);
+        }
+        return 1;
+    }
+    method void Infer_Markdown
+    {
+        comment 'the statements of a block are the parse-time spells; the
+        computed markdown lives on each spell classification.';
+        integer Level = (i Markdown_Level);
+        string Text (Doc_Support:Doc_Pounds Level) ' ' [my Title Unquoted] [line] [line];
+        object Statement;
+        defined [my Block Statements]
+        {
+            for each Statement in [my Block Statements]
+            {
+                forgive
+                {
+                    if ([Statement.Classification Markdown] sgt '')
+                    {
+                        append Text [Statement.Classification Markdown];
+                    }
+                }
+            }
+        }
+        my Markdown = Text;
+    }
+    method void Infer_Script
+    {
+        comment 'the video script never uses a level-one heading';
+        integer Level = (i Markdown_Level);
+        if (Level < 2)
+        {
+            Level = 2;
+        }
+        string Text (Doc_Support:Doc_Pounds Level) ' ' [my Title Unquoted] [line] [line];
+        object Statement;
+        defined [my Block Statements]
+        {
+            for each Statement in [my Block Statements]
+            {
+                forgive
+                {
+                    if ([Statement.Classification Script] sgt '')
+                    {
+                        append Text [Statement.Classification Script];
+                    }
+                }
+            }
+        }
+        my Script = Text;
+    }
+}
+class Body_Statement is Line_Statement
+{
+    property string Markdown = '';
+    property string Script = '';
+    property string Execution_Result = '';
+    property string Drift_Report = '';
+    method void Doc_Execute
+    {
+        comment 'most body statements take no demo action';
+    }
+    method void Infer_Markdown;
+    method void Infer_Script;
+    method string Sentences
+    {
+        comment 'the quoted arguments of a prose statement, one per line,
+        closed by a blank line: one markdown paragraph.';
+        string Text '';
+        object Arg;
+        for each Arg in [my Arguments]
+        {
+            forgive
+            {
+                if ([Arg.Unquoted] sgt '')
+                {
+                    append Text [Arg.Unquoted] [line];
+                }
+            }
+        }
+        append Text [line];
+        return Text;
+    }
+}
+class Runtime_Statement is Body_Statement
+{
+    method string Bash_Capture [string Command]
+    {
+        string Mapped (Doc_Support:Map_Command Command);
+        dictionary Result;
+        shell capture Result Mapped;
+        string Output (dget Result 'stdout');
+        append Output (dget Result 'stderr');
+        Output = (Doc_Support:Trim_End Output);
+        my Execution_Result = Output;
+        return Output;
+    }
+    method string Console_Block
+    {
+        string Block '$ ' [my Command Unquoted];
+        if ([my Execution_Result] sgt '')
+        {
+            append Block [line] [my Execution_Result];
+        }
+        return Block;
+    }
+    method string Fenced_File
+    {
+        comment 'the markdown presentation of a demo file: a fenced code
+        block in the language of its extension.';
+        string Lang (Doc_Support:Fence_Lang [my File_Name Unquoted]);
+        string Text '```' Lang [line] [my Execution_Result] '```' [line] [line];
+        return Text;
+    }
+    method string Scripted_File
+    {
+        comment 'the video-script presentation of a demo file: the booktok
+        pipeline gets the file name and a tilde fence.';
+        string Lang (Doc_Support:Fence_Lang [my File_Name Unquoted]);
+        string Text '<!-- vid: filename=' [my File_Name Unquoted] ' -->' [line] '~~~' Lang [line] [my Execution_Result] '~~~' [line] [line];
+        return Text;
+    }
+}
+statement Chapter 'chapter' Heading
+{
+    argument Title 'string' 'value';
+}
+statement Section 'section' Heading
+{
+    argument Title 'string' 'value';
+}
+statement Paragraph 'paragraph' Body
+{
+    method void Infer_Markdown
+    {
+        my Markdown = (i Sentences);
+    }
+    method void Infer_Script
+    {
+        my Script = (i Sentences);
+    }
+}
+statement Aside 'aside' Body
+{
+    comment 'book-only prose: present in the article, skipped in the video';
+    method void Infer_Markdown
+    {
+        my Markdown = (i Sentences);
+    }
+    method void Infer_Script
+    {
+        string Text '<!-- vid: skip -->' [line] (i Sentences);
+        my Script = Text;
+    }
+}
+statement File 'file' Runtime
+{
+    argument File_Name 'string' 'value';
+    argument Content 'string' 'value';
+    method void Doc_Execute
+    {
+        string Text (Doc_Support:Trim_End [my Content Unquoted]);
+        append Text [line];
+        my Execution_Result = Text;
+        string FN [my File_Name Unquoted];
+        write Text to file FN;
+    }
+    method void Infer_Markdown
+    {
+        my Markdown = (i Fenced_File);
+    }
+    method void Infer_Script
+    {
+        my Script = (i Scripted_File);
+    }
+}
+statement File_From 'file from' Runtime
+{
+    argument File_Name 'string' 'value';
+    argument Source_Path 'string' 'value';
+    method void Doc_Execute
+    {
+        string SP [my Source_Path Unquoted];
+        if (file SP exists)
+        {
+            string Content;
+            fread Content SP;
+            string Text (Doc_Support:Trim_End Content);
+            append Text [line];
+            my Execution_Result = Text;
+            string FN [my File_Name Unquoted];
+            write Text to file FN;
+        }
+        else
+        {
+            string Drift 'DRIFT: file from: no such file ' SP;
+            my Drift_Report = Drift;
+            string Marker '<< missing file: ' SP ' >>' [line];
+            my Execution_Result = Marker;
+        }
+    }
+    method void Infer_Markdown
+    {
+        my Markdown = (i Fenced_File);
+    }
+    method void Infer_Script
+    {
+        my Script = (i Scripted_File);
+    }
+}
+statement Show 'show' Runtime
+{
+    comment 'display a file from the session directory as it exists NOW, so
+    a file produced by an earlier bash statement is shown with its real,
+    captured content.';
+    argument File_Name 'string' 'value';
+    method void Doc_Execute
+    {
+        comment 'a missing file is drift, not a crash: an earlier demo step
+        that should have produced it failed, and the drift report is where
+        that story is told.';
+        string FN [my File_Name Unquoted];
+        if (file FN exists)
+        {
+            string Content;
+            fread Content FN;
+            string Text (Doc_Support:Trim_End Content);
+            append Text [line];
+            my Execution_Result = Text;
+        }
+        else
+        {
+            string Drift 'DRIFT: show: no such file ' FN;
+            my Drift_Report = Drift;
+            string Marker '<< missing file: ' FN ' >>' [line];
+            my Execution_Result = Marker;
+        }
+    }
+    method void Infer_Markdown
+    {
+        my Markdown = (i Fenced_File);
+    }
+    method void Infer_Script
+    {
+        my Script = (i Scripted_File);
+    }
+}
+statement Bash 'bash' Runtime
+{
+    argument Command 'string' 'value';
+    method void Doc_Execute
+    {
+        string Ignored (i Bash_Capture [my Command Unquoted]);
+    }
+    method void Infer_Markdown
+    {
+        string Text '```console' [line] (i Console_Block) [line] '```' [line] [line];
+        my Markdown = Text;
+    }
+    method void Infer_Script
+    {
+        string Text '~~~terminal' [line] (i Console_Block) [line] '~~~' [line] [line];
+        my Script = Text;
+    }
+}
+statement Bash_Expect 'bash expect' Runtime
+{
+    argument Command 'string' 'value';
+    argument Expected 'string' 'value';
+    method void Doc_Execute
+    {
+        string Output (i Bash_Capture [my Command Unquoted]);
+        string Want (Doc_Support:Trim_End [my Expected Unquoted]);
+        if (Want s= Output)
+        {
+            string Pass 'PASS: ' [my Command Unquoted];
+            my Drift_Report = Pass;
+        }
+        else
+        {
+            string Drift 'DRIFT: ' [my Command Unquoted] [line] '--- expected ---' [line] Want [line] '--- actual ---' [line] Output;
+            my Drift_Report = Drift;
+        }
+    }
+    method void Infer_Markdown
+    {
+        string Text '```console' [line] (i Console_Block) [line] '```' [line] [line];
+        my Markdown = Text;
+    }
+    method void Infer_Script
+    {
+        string Text '~~~terminal' [line] (i Console_Block) [line] '~~~' [line] [line];
+        my Script = Text;
+    }
+}
+statement Diagram 'diagram' Body
+{
+    comment 'images are shared across articles: they live in the site
+    images directory, and the article names them bare. the session
+    directory holds a copy of that directory (bin/galdoc provides it), so
+    the statement can verify the image is real; a missing image is
+    reported as drift and fails the build. the markdown path is relative
+    to an article published two directory levels below the site root
+    (articles/<name>/ and build/<name>/ both are).';
+    argument File_Name 'string' 'value';
+    optional Caption 'string' 'value';
+    method string Caption_Text
+    {
+        string Cap 'diagram';
+        forgive
+        {
+            Cap = [my Caption Unquoted];
+        }
+        return Cap;
+    }
+    method string Image_Path
+    {
+        string Path 'images/' [my File_Name Unquoted];
+        return Path;
+    }
+    method void Doc_Execute
+    {
+        string Path (i Image_Path);
+        if (file Path exists)
+        {
+            my Execution_Result = Path;
+        }
+        else
+        {
+            string Drift 'DRIFT: missing image ' Path;
+            my Drift_Report = Drift;
+        }
+    }
+    method void Infer_Markdown
+    {
+        string Text '![' (i Caption_Text) '](../../' (i Image_Path) ')' [line] [line];
+        my Markdown = Text;
+    }
+    method void Infer_Script
+    {
+        comment 'the annotation path is relative to the script.md file,
+        which lands beside the article: same ../../images form as the
+        markdown. booktok stages the image into its project from there.';
+        string Text '<!-- vid: image=../../' (i Image_Path) ' -->' [line] [line];
+        my Script = Text;
+    }
+}
+statement Brand 'brand' Body
+{
+    argument Profile 'string' 'value';
+    method void Infer_Script
+    {
+        string Text '<!-- brand: ' [my Profile Unquoted] ' -->' [line] [line];
+        my Script = Text;
+    }
+}
+dialect Documentation
+{
+    english 'the documentation dialect: language elements for writing
+    articles about gal as gal programs. an article compiles to a markdown
+    article and a booktok video script, and it executes its own demo
+    session; the captured output is the only output ever published.';
+    statements,  Statement_Aside 'aside',  Statement_Bash 'bash',  Statement_Bash_Expect 'bash expect',  Statement_Brand 'brand',  Statement_Chapter 'chapter',  Statement_Diagram 'diagram',  Statement_File 'file',  Statement_File_From 'file from',  Statement_Paragraph 'paragraph' 'para' 'p',  Statement_Section 'section',  Statement_Show 'show' 'edit' 'editor' 'vim';
+}

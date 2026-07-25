@@ -1,0 +1,1040 @@
+flowerbox 'go inference: a go generator covering the five-languages program contract';
+
+comment `
+The go backend, built for the five-languages article: it must compile the
+five contract programs (hello, fizzbuzz, bank, receipt, checkout) and fail
+loudly beyond them, per the c_inference.txt philosophy.
+
+go sits between the extremes: static types like c, but with maps, slices,
+garbage collection and methods. the interesting mappings are module ->
+package main, class -> struct with pointer-receiver methods and a NewX
+construction function, dict -> map, list -> slice, say -> fmt.Printf with
+a format verb chosen per argument from the inferred Data_Type, and a
+string operand in a numeric operation -> a galAtoi or galAtof helper,
+because strconv.Atoi returns two values and cannot sit inside an
+expression.
+
+go is also the one target whose imports are part of the language: fmt,
+strconv, bufio appear only when the program needs them. classes live
+outside the module in gal, so imports and helper functions collect in
+class-level registries on Element rather than on the module, and the
+Program generator assembles package main, the import block, the helpers
+and the statements in go's required order.
+
+go refuses an else on its own line: the Block generator merges an
+else / else if statement onto the closing brace of the statement before
+it.
+`;
+
+class set Element
+{
+    property string Go;
+    property string Go_Statements '';
+    class property list Go_Imports;
+    class property dictionary Go_Import_Set;
+    class property list Go_Helpers;
+    class property dictionary Go_Helper_Set;
+
+    method void Go_Import [string Path]
+    {
+        return if ([my Go_Import_Set] dexists Path);
+        push [my Go_Imports] Path;
+        [my Go_Import_Set] Path d= [true];
+    }
+
+    method void Go_Helper [string Code]
+    {
+        return if ([my Go_Helper_Set] dexists Code);
+        push [my Go_Helpers] Code;
+        [my Go_Helper_Set] Code d= [true];
+    }
+
+    method string Go_Arg_Data_Type [object Arg]
+    {
+        forgive
+        {
+            object AC [Arg.Classification];
+            string T [AC.Data_Type];
+            return '' if (T is an Element);
+            return T;
+        }
+        return '';
+    }
+
+    method string Go_Type [string T]
+    {
+        return 'int' if (T s= 'integer');
+        return 'float64' if (T s= 'number');
+        return 'string' if (T s= 'string');
+        return 'bool' if (T s= 'flag');
+        error 'go generator: no go type for gal type ' T;
+    }
+
+    method string Go_Value_Type [object Arg]
+    {
+        comment `the go type of a literal or typed argument, used to give
+        maps and slices their element types`;
+        forgive
+        {
+            object AC [Arg.Classification];
+            if (AC is a Token_Quote)
+            {
+                return 'string';
+            }
+            if (AC is a Token_Number)
+            {
+                if ([AC.Text] contains '.')
+                {
+                    return 'float64';
+                }
+                return 'int';
+            }
+            string DT [AC.Data_Type];
+            if (not (DT is an Element))
+            {
+                return (i Go_Type DT);
+            }
+        }
+        error 'go generator: cannot infer a go type for ' (Arg.Get_Input);
+    }
+
+    method string Go_Escape [string Text]
+    {
+        if (Text contains '\')
+        {
+            replace Text '\' '\\';
+        }
+        if (Text contains '"')
+        {
+            replace Text '"' '\"';
+        }
+        if (Text contains [tab])
+        {
+            replace Text [tab] '\t';
+        }
+        if (Text contains [line])
+        {
+            replace Text [line] '\n';
+        }
+        return Text;
+    }
+
+    method string Go_Quote [string Text]
+    {
+        return (append '"' (i Go_Escape Text) '"');
+    }
+
+    method string Go_Escape_Format [string Text]
+    {
+        Text = (i Go_Escape Text);
+        if (Text contains '%')
+        {
+            replace Text '%' '%%';
+        }
+        return Text;
+    }
+
+    method string Go_Format_Verb [object Arg]
+    {
+        comment `the printf verb chosen by the argument's inferred
+        definitional type; %v is go's graceful catch-all for arguments the
+        inference could not type, such as a for-each loop variable`;
+        string DT (i Go_Arg_Data_Type Arg);
+        return '%d' if (DT s= 'integer');
+        return '%s' if (DT s= 'string');
+        return '%g' if (DT s= 'number');
+        return '%v';
+    }
+
+    method string Go_Args [string Separator]
+    {
+        object Arg;
+        string Args_Go '';
+        string Between '';
+        for each Arg in [my Listargs]
+        {
+            if (not (defined [Arg.Go]))
+            {
+                error 'Argument Go not defined: ' [Arg.Gal];
+            }
+            append Args_Go Between [Arg.Go];
+            = Between Separator;
+        }
+        return Args_Go;
+    }
+
+    method string Go_Arguments [string Separator]
+    {
+        object Arg;
+        string Args_Go '';
+        string Between '';
+        for each Arg in [my Arguments]
+        {
+            if (not (defined [Arg.Go]))
+            {
+                error 'Argument Go not defined: ' [Arg.Gal];
+            }
+            append Args_Go Between [Arg.Go];
+            = Between Separator;
+        }
+        return Args_Go;
+    }
+
+    method string Go_Params
+    {
+        comment `a method or constructor parameter list: the bracket
+        parameters live in Listargs, each already generated as
+        name-space-type`;
+        object Arg;
+        string Code '';
+        string Between '';
+        for each Arg in [my Listargs]
+        {
+            append Code Between [Arg.Go];
+            = Between ', ';
+        }
+        return Code;
+    }
+
+    method string Go_Property_Default [object C]
+    {
+        forgive
+        {
+            if (not ([C.Value] is null))
+            {
+                return [C.Value Go];
+            }
+        }
+        string T (i Go_Type [C.Type Go]);
+        return '0' if (T s= 'int');
+        return '0.0' if (T s= 'float64');
+        return '""' if (T s= 'string');
+        return 'false';
+    }
+}
+
+class set Statement
+{
+    method string Go_Block
+    {
+        forgive
+        {
+            if (not ([my Block Go] is null))
+            {
+                return [my Block Go];
+            }
+        }
+        return (append ' {' [line] '}');
+    }
+}
+
+class set Operation
+{
+    method string Go_Numeric_Operand [object Op]
+    {
+        comment `go must convert a string-typed operand explicitly, and
+        strconv.Atoi returns a second error value, so the conversion is a
+        one-line helper: galAtoi when the surrounding usage is integer,
+        galAtof otherwise`;
+        string Code [Op.Go];
+        if ((i Go_Arg_Data_Type Op) s= 'string')
+        {
+            string Conv 'galAtof';
+            if ([my Usage] s= 'integer')
+            {
+                Conv = 'galAtoi';
+            }
+            i Go_Import '"strconv"';
+            i Go_Import '"strings"';
+            string H 'func galAtoi(S string) int {';
+            append H [line] [indent] 'N, _ := strconv.Atoi(strings.TrimSpace(S))';
+            append H [line] [indent] 'return N';
+            append H [line] '}' [line] [line];
+            append H 'func galAtof(S string) float64 {';
+            append H [line] [indent] 'N, _ := strconv.ParseFloat(strings.TrimSpace(S), 64)';
+            append H [line] [indent] 'return N';
+            append H [line] '}';
+            i Go_Helper H;
+            Code = (append Conv '(' Code ')');
+        }
+        return Code;
+    }
+
+    method string Go_Numeric_Infix [object Op1, object Op2, string Infix]
+    {
+        if ((llength [my Arguments]) > 2)
+        {
+            error 'go generator: operation chains longer than two operands are outside the contract';
+        }
+        return (append '(' (i Go_Numeric_Operand Op1) Infix (i Go_Numeric_Operand Op2) ')');
+    }
+
+    method string Go_Infix [object Op1, object Op2, string Infix]
+    {
+        if ((llength [my Arguments]) > 2)
+        {
+            error 'go generator: operation chains longer than two operands are outside the contract';
+        }
+        return (append '(' [Op1.Go] Infix [Op2.Go] ')');
+    }
+}
+
+generator Go Fallback
+{
+    english 'generate go code for each language element, using the inferred data types.';
+
+    generate Element
+    {
+        i = '';
+    }
+
+    generate Statement
+    {
+        error 'no go generator for statement ' [class name];
+    }
+
+    generate Operation
+    {
+        error 'no go generator for operation ' [class name];
+    }
+
+    generate Token
+    {
+        i = [my Text];
+    }
+
+    generate Token_Quote
+    {
+        i = (i Go_Quote [my Unquoted]);
+    }
+
+    generate Syntax_True
+    {
+        i = 'true';
+    }
+
+    generate Syntax_False
+    {
+        i = 'false';
+    }
+
+    generate Syntax_Line
+    {
+        comment `the go expression for an embedded [line], plus the side
+        effect every target's literal generator supplies: Unquoted holds
+        the real character for the format and comment builders`;
+        if (defined [my Count])
+        {
+            error 'go generator: repeated literals are outside the contract';
+        }
+        my Unquoted = [line];
+        i = '"\n"';
+    }
+
+    generate Syntax_Tab
+    {
+        if (defined [my Count])
+        {
+            error 'go generator: repeated literals are outside the contract';
+        }
+        my Unquoted = [tab];
+        i = '"\t"';
+    }
+
+    generate Syntax_Indent
+    {
+        if (defined [my Count])
+        {
+            error 'go generator: repeated literals are outside the contract';
+        }
+        my Unquoted = '    ';
+        i = '"    "';
+    }
+
+    generate Program
+    {
+        comment `go dictates the file order: the package clause, then the
+        import block, then declarations. the statements generate first, so
+        the import and helper registries are complete by the time the
+        header is assembled`;
+        string Body '';
+        object Stmt;
+        for each Stmt in [my Statements]
+        {
+            undefined [Stmt.Go]
+            {
+                Stmt.Infer_Go;
+            }
+            string S [Stmt.Go];
+            if (S sgt '')
+            {
+                append Body S [line];
+            }
+        }
+        string Code 'package main' [line] [line];
+        integer NI (llength [my Go_Imports]);
+        if (NI = 1)
+        {
+            append Code 'import ' (lget [my Go_Imports] 0) [line] [line];
+        }
+        else if (NI > 1)
+        {
+            append Code 'import (' [line];
+            string Imp;
+            for each Imp in [my Go_Imports]
+            {
+                append Code [indent] Imp [line];
+            }
+            append Code ')' [line] [line];
+        }
+        string H;
+        for each H in [my Go_Helpers]
+        {
+            append Code H [line] [line];
+        }
+        append Code Body;
+        i = Code;
+    }
+
+    generate Block
+    {
+        comment `go requires else and else if on the same line as the
+        closing brace of the preceding block, so those statements merge
+        onto the statement before them`;
+        list Parts;
+        object Line;
+        for each Line in [my Statements]
+        {
+            string S [Line.Go];
+            continue if (S seq '');
+            if (((length S) >= 4) and ((substring S 0 4) s= 'else') and ((llength Parts) > 0))
+            {
+                string Prev (pop Parts);
+                push Parts (append Prev ' ' S);
+            }
+            else
+            {
+                push Parts S;
+            }
+        }
+        string Statements '';
+        string P;
+        for each P in Parts
+        {
+            append Statements P [line];
+        }
+        my Go_Statements = Statements;
+        string Code (append ' {' [line] (i Indent Statements) '}');
+        i = Code;
+    }
+
+    generate Statement_Flowerbox
+    {
+        i = '';
+    }
+
+    generate Statement_Comment
+    {
+        string Text '';
+        object Argument;
+        for each Argument in [my Arguments]
+        {
+            if (Argument is a Token_Quote)
+            {
+                append Text [Argument.Unquoted];
+            }
+            else
+            {
+                string Piece (Argument.Get_Input);
+                forgive
+                {
+                    comment `a bracketed literal like [line] carries its real
+                    character in the classification's Unquoted property`;
+                    object AC [Argument.Classification];
+                    if ((AC is a Literal_Syntax) and (defined [AC.Unquoted]))
+                    {
+                        Piece = [AC.Unquoted];
+                    }
+                }
+                append Text Piece;
+            }
+        }
+        # 'quote openers would poison Element.Indent quote tracking downstream, replace with closing homoglyphs';
+        replace Text "'" '’';
+        replace Text '"' '”';
+        replace Text '`' '’';
+        replace Text '“' '”';
+        replace Text '‘' '’';
+        replace Text '«' '»';
+        replace Text '‹' '›';
+        string Code '';
+        lsplit Lines Text [line];
+        for each Text in Lines
+        {
+            if (Code sgt '')
+            {
+                append Code [line];
+            }
+            append Code '// ' Text;
+        }
+        i = Code;
+    }
+
+    generate Statement_Module
+    {
+        string Code '// module: ' [my Name Go] [line];
+        object Stmt;
+        for each Stmt in [my Block Statements]
+        {
+            string S [Stmt.Go];
+            if (S sgt '')
+            {
+                append Code S [line];
+            }
+        }
+        i = Code;
+    }
+
+    generate Statement_Main
+    {
+        if ((llength [my Listargs]) > 0)
+        {
+            error 'go generator: main with arguments is outside the contract';
+        }
+        i = (append 'func main()' (i Go_Block));
+    }
+
+    generate Statement_Integer
+    {
+        string Value '0';
+        forgive
+        {
+            if (not ([my Value] is null))
+            {
+                Value = [my Value Go];
+            }
+        }
+        i = (append [my Name Go] ' := ' Value);
+    }
+
+    generate Statement_Number
+    {
+        string Value '0.0';
+        forgive
+        {
+            if (not ([my Value] is null))
+            {
+                Value = [my Value Go];
+            }
+        }
+        i = (append [my Name Go] ' := ' Value);
+    }
+
+    generate Statement_Flag
+    {
+        string Value 'false';
+        forgive
+        {
+            if (not ([my Value] is null))
+            {
+                Value = [my Value Go];
+            }
+        }
+        i = (append [my Name Go] ' := ' Value);
+    }
+
+    generate Statement_String
+    {
+        string Value '""';
+        forgive
+        {
+            if ((llength [my Listargs]) > 0)
+            {
+                object V (lget [my Listargs] 0);
+                Value = [V.Go];
+            }
+        }
+        i = (append [my Name Go] ' := ' Value);
+    }
+
+    generate Statement_Object
+    {
+        string Value '';
+        forgive
+        {
+            if (not ([my Value] is null))
+            {
+                Value = [my Value Go];
+            }
+        }
+        if (Value seq '')
+        {
+            error 'go generator: object declaration without a value: ' [my Name Go];
+        }
+        i = (append [my Name Go] ' := ' Value);
+    }
+
+    generate Statement_List
+    {
+        if ((llength [my Listargs]) = 0)
+        {
+            error 'go generator: an empty list declaration is outside the contract: ' [my Name Go];
+        }
+        string ET (i Go_Value_Type (lget [my Listargs] 0));
+        i = (append [my Name Go] ' := []' ET '{' (i Go_Args ', ') '}');
+    }
+
+    generate Statement_Dictionary
+    {
+        comment `go needs the map's value type at the declaration; gal's
+        inference stops at 'dictionary', so the declaration reads it from
+        the first sibling dictionary assignment it can see`;
+        string My_Name [my Name Go];
+        string VT '';
+        forgive
+        {
+            comment `Parent is the enclosing scoped statement, and its Block
+            holds the sibling statements`;
+            object P [my Parent];
+            object S;
+            for each S in [P.Block Statements]
+            {
+                continue if (VT sgt '');
+                forgive
+                {
+                    object C [S.Classification];
+                    if (C is a Statement_Dictionary_Assign)
+                    {
+                        object D [C.Dict];
+                        if ((D.Get_Input) s= My_Name)
+                        {
+                            VT = (i Go_Value_Type [C.Value]);
+                        }
+                    }
+                }
+            }
+        }
+        if (VT seq '')
+        {
+            error 'go generator: cannot infer the value type of dictionary ' My_Name;
+        }
+        i = (append My_Name ' := map[string]' VT '{}');
+    }
+
+    generate Statement_Dictionary_Assign
+        Dict '[' Subscript '] = ' Value;
+
+    generate Operation_Dict_Get
+        Dictionary '[' Key ']';
+
+    generate Statement_Assign
+        Destination ' = ' Value;
+
+    generate Statement_Say
+    {
+        i Go_Import '"fmt"';
+        string Fmt '';
+        string Rest '';
+        string Plain '';
+        flag All_Literal [true];
+        object Arg;
+        for each Arg in [my Arguments]
+        {
+            object AC [Arg.Classification];
+            string U '<none>';
+            forgive
+            {
+                string U2 [AC.Unquoted];
+                if (not (U2 is an Element))
+                {
+                    U = U2;
+                }
+            }
+            if (U sne '<none>')
+            {
+                append Fmt (i Go_Escape_Format U);
+                append Plain U;
+            }
+            else
+            {
+                All_Literal = [false];
+                append Fmt (i Go_Format_Verb Arg);
+                append Rest ', ' [Arg.Go];
+            }
+        }
+        if All_Literal
+        {
+            i = (append 'fmt.Println(' (i Go_Quote Plain) ')');
+        }
+        else
+        {
+            i = (append 'fmt.Printf("' Fmt '\n"' Rest ')');
+        }
+    }
+
+    generate Statement_Append
+    {
+        string Fmt '';
+        string Rest '';
+        string Plain '';
+        flag All_Literal [true];
+        object Arg;
+        for each Arg in [my Listargs]
+        {
+            object AC [Arg.Classification];
+            string U '<none>';
+            forgive
+            {
+                string U2 [AC.Unquoted];
+                if (not (U2 is an Element))
+                {
+                    U = U2;
+                }
+            }
+            if (U sne '<none>')
+            {
+                append Fmt (i Go_Escape_Format U);
+                append Plain U;
+            }
+            else
+            {
+                All_Literal = [false];
+                append Fmt (i Go_Format_Verb Arg);
+                append Rest ', ' [Arg.Go];
+            }
+        }
+        if All_Literal
+        {
+            i = (append [my Variable Go] ' += ' (i Go_Quote Plain));
+        }
+        else
+        {
+            i Go_Import '"fmt"';
+            i = (append [my Variable Go] ' += fmt.Sprintf("' Fmt '"' Rest ')');
+        }
+    }
+
+    generate Statement_Readline
+    {
+        comment `string literals are prompts, names are input variables:
+        each name reads one line, carrying the prompt gathered since the
+        last read. the read itself is a shared bufio.Scanner over stdin`;
+        i Go_Import '"bufio"';
+        i Go_Import '"os"';
+        string H 'var galIn = bufio.NewScanner(os.Stdin)' [line] [line]
+            'func galReadline() string {' [line]
+            [indent] 'galIn.Scan()' [line]
+            [indent] 'return galIn.Text()' [line]
+            '}';
+        i Go_Helper H;
+        string Code '';
+        string Between '';
+        string Prompt '';
+        objects Arg Argc;
+        for each Arg in [my Arguments]
+        {
+            Argc = [Arg.Classification];
+            if (Argc is a Token_Quote)
+            {
+                if (Prompt sgt '')
+                {
+                    append Prompt ' + ';
+                }
+                append Prompt [Arg.Go];
+            }
+            else
+            {
+                if (Prompt sgt '')
+                {
+                    i Go_Import '"fmt"';
+                    append Code Between 'fmt.Print(' Prompt ')';
+                    Between = [line];
+                    Prompt = '';
+                }
+                append Code Between [Arg.Go] ' = galReadline()';
+                Between = [line];
+            }
+        }
+        i = Code;
+    }
+
+    generate Statement_If
+        'if ' Condition (i Go_Block);
+
+    generate Statement_Else_If
+        'else if ' Condition (i Go_Block);
+
+    generate Statement_Else
+        'else' (i Go_Block);
+
+    generate Statement_For_Range
+    {
+        string V [my Variable Go];
+        string Code 'for ' V ' := ' [my Start Go] '; ' V ' <= ' [my End Go] '; ';
+        if (defined [my Increment])
+        {
+            append Code V ' += ' [my Increment Go];
+        }
+        else
+        {
+            append Code V '++';
+        }
+        append Code (i Go_Block);
+        i = Code;
+    }
+
+    generate Statement_For_Each
+        'for _, ' Item ' := range ' List (i Go_Block);
+
+    generate Statement_For_Each_In
+        'for _, ' Item ' := range ' List (i Go_Block);
+
+    generate Statement_Class
+    {
+        comment `go has no inheritance: the universal Base of a standalone
+        program vanishes, and a class becomes a struct, a NewX construction
+        function carrying the property defaults and the constructor body,
+        and one top-level func per method with a pointer receiver`;
+        string Fields '';
+        string Defaults '';
+        string Constructor '';
+        string Methods '';
+        flag Has_Body [false];
+        forgive
+        {
+            objects S C;
+            for each S in [my Block Statements]
+            {
+                Has_Body = [true];
+                C = [S.Classification];
+                if (C is a Statement_Constructor)
+                {
+                    Constructor = [S.Go];
+                }
+                else if (C is a Statement_Property)
+                {
+                    append Fields [indent] [S.Go] [line];
+                    append Defaults [indent] 'Self.' [C.Name Go] ' = ' (i Go_Property_Default C) [line];
+                }
+                else if (C is a Statement_Method)
+                {
+                    append Methods [S.Go] [line] [line];
+                }
+                else if (C is a Statement_Comment)
+                {
+                    append Methods [S.Go] [line];
+                }
+                else
+                {
+                    error 'go generator: statement outside the class contract in class ' [my Class_Name Go];
+                }
+            }
+        }
+        if (not Has_Body)
+        {
+            i = '';
+        }
+        else
+        {
+            string CN [my Class_Name Go];
+            string Code 'type ' CN ' struct {' [line] Fields '}' [line] [line];
+            if (Constructor seq '')
+            {
+                Constructor = (append 'func New' CN '() *' CN ' {' [line]
+                    '{[(godefaults)]}'
+                    [indent] 'return Self' [line]
+                    '}');
+                Defaults = (append [indent] 'Self := &' CN '{}' [line] Defaults);
+            }
+            replace Constructor '{[(godefaults)]}' Defaults;
+            append Code Constructor [line] [line] Methods;
+            i = Code;
+        }
+    }
+
+    generate Property_Statement
+    {
+        i = (append [my Name Go] ' ' (i Go_Type [my Type Go]));
+    }
+
+    generate Statement_Constructor
+    {
+        object Cls = (i Get_Owner_Class);
+        string CN [Cls.Class_Name Go];
+        string Body '';
+        forgive
+        {
+            Body = [my Block Go_Statements];
+        }
+        string Code 'func New' CN '(' (i Go_Params) ') *' CN ' {' [line]
+            [indent] 'Self := &' CN '{}' [line]
+            '{[(godefaults)]}'
+            (i Indent Body)
+            [indent] 'return Self' [line]
+            '}';
+        i = Code;
+    }
+
+    generate Statement_Method
+    {
+        object Cls = (i Get_Owner_Class);
+        string Code 'func (Self *' [Cls.Class_Name Go] ') ' [my Name Go] '(' (i Go_Params) ')';
+        string RT '';
+        forgive
+        {
+            string T2 [my Data_Type Go];
+            if (not (T2 is an Element))
+            {
+                RT = T2;
+            }
+        }
+        if ((RT sgt '') and (RT sne 'void'))
+        {
+            append Code ' ' (i Go_Type RT);
+        }
+        append Code (i Go_Block);
+        i = Code;
+    }
+
+    generate Argument_Syntax
+    {
+        if (defined [my Default_Value])
+        {
+            error 'go generator: argument default values are outside the contract';
+        }
+        string T '';
+        forgive
+        {
+            string T2 [my Data_Type];
+            if (not (T2 is an Element))
+            {
+                T = T2;
+            }
+        }
+        if (T seq '')
+        {
+            error 'go generator: untyped argument ' [my Variable Go];
+        }
+        i = (append [my Variable Go] ' ' (i Go_Type T));
+    }
+
+    generate Syntax_My
+        'Self.' (i Go_Arguments '.');
+
+    generate Statement_My_Equal
+        'Self.' Property_Name ' = ' Value;
+
+    generate Statement_Call
+        Object '.' Method '(' (i Go_Args ', ') ')';
+
+    generate Operation_New
+        'New' Class_Name '(' (i Go_Args ', ') ')';
+
+    generate Statement_Return
+    {
+        string Code 'return';
+        forgive
+        {
+            if (defined [my Value])
+            {
+                append Code ' ' [my Value Go];
+            }
+        }
+        i = Code;
+    }
+
+    generate Operation_Add
+        (i Go_Numeric_Infix [my Op1] [my Op2] ' + ');
+    generate Operation_Minus
+        (i Go_Numeric_Infix [my Op1] [my Op2] ' - ');
+    generate Operation_Multiply
+        (i Go_Numeric_Infix [my Op1] [my Op2] ' * ');
+    generate Operation_Divide
+        (i Go_Numeric_Infix [my Op1] [my Op2] ' / ');
+    generate Operation_Modulo
+        (i Go_Numeric_Infix [my Op1] [my Op2] ' % ');
+    generate Operation_Greater
+        (i Go_Infix [my Op1] [my Op2] ' > ');
+    generate Operation_Less
+        (i Go_Infix [my Op1] [my Op2] ' < ');
+    generate Operation_Greater_Equal
+        (i Go_Infix [my Op1] [my Op2] ' >= ');
+    generate Operation_Less_Equal
+        (i Go_Infix [my Op1] [my Op2] ' <= ');
+    generate Operation_Equal
+        (i Go_Infix [my Op1] [my Op2] ' == ');
+    generate Operation_Not_Equal
+        (i Go_Infix [my Op1] [my Op2] ' != ');
+    generate Operation_And
+        (i Go_Infix [my Op1] [my Op2] ' && ');
+    generate Operation_Or
+        (i Go_Infix [my Op1] [my Op2] ' || ');
+    generate Operation_Not
+        '(!' [my Op1 Go] ')';
+}
+
+class Go_Compiler is Fallback_Compiler
+{
+    constructor
+    {
+        my Generator = (new Go_Generator [self]);
+    }
+    method void Print_Errors
+    {
+        object E;
+        for each E in [my Elements]
+        {
+            if (not ([E.Error] is null))
+            {
+                say [line]
+                    [class name [E.Classification]]
+                    ': '
+                    (substring (E.Get_Input) 0 80);
+                say 'ERROR: ' [E.Error];
+            }
+        }
+    }
+    method number Infer_Code
+    {
+        verbosity;
+        [my Generator Elements] = [my Elements];
+        number Status = ([my Generator].Infer_Gal);
+        if (not Status)
+        {
+            i Print_Errors;
+            say 'Error in Go inference, inferring gal';
+            return 0;
+        }
+        Status = ([my Generator].Infer_Fallback);
+        if (not Status)
+        {
+            i Print_Errors;
+            say 'Error in Go inference, inferring fallback';
+            return 0;
+        }
+        Status = ([my Generator].Infer_Go);
+        if (not Status)
+        {
+            comment `a subset backend fails loudly: a generator error on any
+            element must fail the compile, not leak None into the output`;
+            i Print_Errors;
+            say 'Error in Go inference, inferring go';
+            return 0;
+        }
+        object Top = (llast [my Elements]);
+        try
+        {
+            if ([Top.Go] is null)
+            {
+                Top.Infer_Go;
+            }
+        }
+        catch Error
+        {
+            say 'Error in Go inference: ' Error;
+            return 0;
+        }
+        my Go = [Top.Go];
+        return 1;
+    }
+}

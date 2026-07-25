@@ -1,0 +1,23 @@
+#!/bin/bash
+
+TMP="tmp/ramdisk/gs2"
+
+mkdir -p $TMP
+
+function Compile
+{
+    rm -f "$3" &1>/dev/null
+    ~/.goalspell/goalspell gs $1 "$2" "$3"
+
+    if [ ! -f "$3" ]
+    then
+        echo "File $3 not created. Aborting."
+    fi
+}
+
+Compile fb "$1.gs" "$TMP/$1.fb0"
+Compile fb "$TMP/$1.fb0" "$TMP/$1.fb1"
+Compile fb "$TMP/$1.fb1" "$TMP/$1.fb2"
+Compile c "$TMP/$1.fb2" "$1.c"
+ls -l "$1.c"
+

@@ -1,0 +1,30 @@
+# tiny test grammar exercising pegen metagrammar constructs
+@trailer '''
+nothing here
+'''
+
+start[mod_ty]: a=stmt* ENDMARKER { make_module(a) }
+
+stmt: compound | simple
+
+simple[stmt_ty]:
+    | 'pass' NEWLINE { pass_stmt() }
+    | e=expr NEWLINE { expr_stmt(e) }
+
+compound:
+    | &'if' if_stmt
+    | !'if' loop_stmt
+
+if_stmt: 'if' t=expr ':' b=block [else_block] { if_node(t, b) }
+
+else_block: 'else' ':' block
+
+loop_stmt: 'while' ~ t=expr ':' b=block { while_node(t, b) }
+
+block: NEWLINE INDENT stmt+ DEDENT
+
+expr: term (('+' | '-') term)*
+
+term[expr_ty]: a=NAME { name_node(a) } | n=NUMBER { num_node(n) }
+
+names: a=','.NAME+ { a }

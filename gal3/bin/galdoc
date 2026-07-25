@@ -1,0 +1,65 @@
+#!/bin/bash
+# galdoc: compile a documentation-dialect article into a markdown article
+# and a booktok video script. The article is a gal program in the
+# Documentation dialect, which plugs into the compiler via the include
+# mechanism (see gal_compiler_plugins.txt); the galdoc_plug tool parses the
+# article and RUNS it in a fresh session directory. Running it executes the
+# demo session for real: file statements write files, bash statements run
+# through a shell, and the captured output is what lands in both outputs.
+# Stated expectations are diffed against reality; drift makes galdoc exit
+# nonzero.
+#
+# usage: galdoc <article.txt> [output-dir]
+#   outputs: <name>.md, <name>.script.md, <name>.drift.md (when expectations
+#   were stated) next to the article, or in output-dir when given.
+#   demo assets referenced by 'file ... from ...' live beside the article.
+
+set -e
+HERE="$(dirname "$(readlink -f "$0")")"
+source "$HERE/../../galenv"
+
+ART="$(readlink -f "$1")"
+if [ ! -f "$ART" ]; then
+    echo "galdoc: no such article: $1" >&2
+    exit 2
+fi
+NAME="$(basename "$ART")"
+NAME="${NAME%.*}"
+SRC_DIR="$(dirname "$ART")"
+OUT="${2:-$SRC_DIR}"
+mkdir -p "$OUT"
+
+W="$(mktemp -d /tmp/galdoc.XXXXXX)"
+echo "galdoc: session $W"
+
+# the session starts from the article's directory (demo assets live there)
+# plus the gal toolchain, so demo commands like 'galpy hello.txt hello.py'
+# resolve to the local binaries.
+cp -r "$SRC_DIR"/. "$W"/
+cp ~/.gal3/*.py "$W"/ 2>/dev/null
+
+# shared images: articles reference images from the site images directory
+# (two levels up from the article, by convention). the session gets a copy
+# so diagram statements can verify each image is real.
+IMAGES="$(readlink -f "$SRC_DIR/../..")/images"
+if [ -d "$IMAGES" ]; then
+    mkdir -p "$W/images"
+    cp -r "$IMAGES"/. "$W/images"/
+fi
+
+( cd "$W" && python "$HOME/.gal3/galdoc_plug.py" "$(basename "$ART")" "article.md" )
+
+[ -f "$W/article.md" ] || { echo "galdoc: article produced no output" >&2; exit 1; }
+cp "$W/article.md" "$OUT/$NAME.md"
+cp "$W/article.script.md" "$OUT/$NAME.script.md"
+echo "galdoc: wrote $OUT/$NAME.md"
+echo "galdoc: wrote $OUT/$NAME.script.md"
+
+if [ -f "$W/article.drift.md" ]; then
+    cp "$W/article.drift.md" "$OUT/$NAME.drift.md"
+    echo "galdoc: wrote $OUT/$NAME.drift.md"
+    if grep -q '^DRIFT:' "$W/article.drift.md"; then
+        echo "galdoc: DRIFT — expectations not met (compiler bug or stale article)" >&2
+        exit 1
+    fi
+fi

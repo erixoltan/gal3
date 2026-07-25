@@ -1,0 +1,22 @@
+flowerbox 'gal to go main';
+main [string Source_File, string Target_File]
+{
+    verbosity;
+    verbose 'gal go compiler';
+    verbose 'input file: ' Source_File;
+    string Report_File Target_File '.elems';
+    object GC = (new Go_Compiler);
+    GC.Initialize;
+    GC.File_Name = Source_File;
+    GC.Code = '<undefined>';
+    number Status = (GC.Infer);
+    if (Status = 0)
+    {
+        say 'Error inferring go code';
+        write (GC.Element_Report) to Report_File;
+    }
+    else
+    {
+        write [GC.Go] to Target_File;
+    }
+}

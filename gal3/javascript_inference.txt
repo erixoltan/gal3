@@ -1,0 +1,1756 @@
+class set Element
+{
+    property string Javascript;
+    property integer Javascript_Precedence 0;
+    method string Javascript_String
+    {
+        string Js [my Javascript];
+        forgive
+        {
+            return Js if ([my Data_Type] s= 'string');
+        }
+        comment `globalThis: compiler sources declare their own String class,
+        which shadows the built-in across the whole module scope`;
+        return (append 'globalThis.String(' Js ')');
+    }
+    method string Javascript_Enquote [string Text]
+    {
+        if (Text contains '\')
+        {
+            replace Text '\' '\\';
+        }
+        if (Text contains [tab])
+        {
+            replace Text [tab] "\t";
+        }
+        if (Text contains [line])
+        {
+            replace Text [line] "\n";
+        }
+        string CR (Runtime:Chr 13);
+        if (Text contains CR)
+        {
+            replace Text CR "\r";
+        }
+        return (append "'" Text "'" ) if (not (Text contains "'"));
+        return (append '"' Text '"' ) if (not (Text contains '"'));
+        replace Text "'" "\'";
+        return (append "'" Text "'");
+    }
+    method string Javascript_Escape [string Text]
+    {
+        comment 'escape literal text for inclusion inside a template literal';
+        if (Text contains '\')
+        {
+            replace Text '\' '\\';
+        }
+        if (Text contains '`')
+        {
+            replace Text '`' '\`';
+        }
+        if (Text contains '${')
+        {
+            replace Text '${' '\${';
+        }
+        if (Text contains [tab])
+        {
+            replace Text [tab] '\t';
+        }
+        if (Text contains [line])
+        {
+            replace Text [line] '\n';
+        }
+        string CR (Runtime:Chr 13);
+        if (Text contains CR)
+        {
+            replace Text CR '\r';
+        }
+        return Text;
+    }
+    method string Javascript_Indent [string Text]
+    {
+        return '' if (isnull Text);
+        dictionary Qend;
+        Qend '"' d= '"';
+        Qend "'" d= "'";
+        Qend '`' d= '`';
+        integer P;
+        string C;
+        string I '';
+        flag Quote [false];
+        string Q '';
+        string Between [indent];
+        integer E = ((length Text) - 1);
+        for P range 0 E
+        {
+            C = (substring Text P 1);
+            append I Between C;
+            Between = '';
+            if Quote
+            {
+                if (C s= Q)
+                {
+                    Quote = [false];
+                    Q = '';
+                }
+            }
+            else if (C = [line])
+            {
+                Between = [indent];
+            }
+            else if (Qend dexists C)
+            {
+                Quote = [true];
+                Q = (dget Qend C);
+            }
+        }
+        return I;
+    }
+    method void Javascript_Append_Flatten [object Arg, list Into]
+    {
+        forgive
+        {
+            object AC [Arg.Classification];
+            if (AC is an Operation_Append)
+            {
+                object M;
+                for each M in [AC.Arguments]
+                {
+                    i Javascript_Append_Flatten M Into;
+                }
+                return;
+            }
+        }
+        push Into Arg;
+    }
+
+    method string Javascript_Append [list Raw_Arguments]
+    {
+        list Arguments;
+        object A0;
+        for each A0 in Raw_Arguments
+        {
+            i Javascript_Append_Flatten A0 Arguments;
+        }
+        return '' if ((llength Arguments) = 0);
+        if ((llength Arguments) = 1)
+        {
+            object Arg (lget Arguments 0);
+            return (Arg.Javascript_String);
+        }
+        objects Arg Argc;
+        string U;
+        string Code '';
+        flag Embed = [false];
+        for each Arg in Arguments
+        {
+            Argc = [Arg.Classification];
+            if (Argc is a Literal_Syntax)
+            {
+                if (not (defined [Argc.Unquoted]))
+                {
+                    Embed = [true];
+                }
+            }
+            else if (Argc is a Token_Quote)
+            {
+            }
+            else if (Argc is a Token_Number)
+            {
+            }
+            else
+            {
+                Embed = [true];
+            }
+        }
+        for each Arg in Arguments
+        {
+            Argc = [Arg.Classification];
+            if ((Argc is a Literal_Syntax) and (defined [Argc.Unquoted]))
+            {
+                U = [Argc.Unquoted];
+                if Embed
+                {
+                    U = (i Javascript_Escape U);
+                }
+                append Code U;
+            }
+            else if (Argc is a Token_Quote)
+            {
+                U = [Argc.Unquoted];
+                if Embed
+                {
+                    U = (i Javascript_Escape U);
+                }
+                append Code U;
+            }
+            else if (Argc is a Token_Number)
+            {
+                append Code [Argc.Javascript];
+            }
+            else
+            {
+                append Code '${ ' [Argc.Javascript] ' }';
+            }
+        }
+        if Embed
+        {
+            Code = (append '`' Code '`');
+        }
+        else
+        {
+            Code = (i Javascript_Enquote Code);
+        }
+        return Code;
+    }
+}
+
+class set Spell
+{
+    method string Javascript_Arguments [string Separator]
+    {
+        object Arg;
+        string Args_Js '';
+        string Between '';
+        for each Arg in [my Arguments]
+        {
+            if (not (defined [Arg.Javascript]))
+            {
+                error 'Argument Javascript not defined: ' [Arg.Gal];
+            }
+            string Arg_Js [Arg.Javascript];
+            append Args_Js Between Arg_Js;
+            = Between Separator;
+        }
+        return Args_Js;
+    }
+    method string Javascript_Args [string Separator]
+    {
+        object Arg;
+        string Args_Js '';
+        string Between '';
+        for each Arg in [my Listargs]
+        {
+            if (not (defined [Arg.Javascript]))
+            {
+                error 'Argument Javascript not defined: ' [Arg.Gal];
+            }
+            string Arg_Js [Arg.Javascript];
+            append Args_Js Between Arg_Js;
+            = Between Separator;
+        }
+        return Args_Js;
+    }
+    method string Javascript_Arg_Data_Type [object Arg]
+    {
+        forgive
+        {
+            object C [Arg.Classification];
+            string T [C.Data_Type];
+            return '' if (T is an Element);
+            return T;
+        }
+        return '';
+    }
+    method void Javascript_Runtime_Include [object Receiver]
+    {
+        comment `a call through the Runtime class needs its helper inlined;
+        browsers have no require so the class is emitted into the module`;
+        forgive
+        {
+            if ((Receiver.Get_Input) s= 'Runtime')
+            {
+                object Module (i Get_Module);
+                if (not (Module is null))
+                {
+                    string Helper 'class Runtime {';
+                    append Helper [line] [indent] 'static Chr(N) {';
+                    append Helper [line] [indent] [indent] 'return globalThis.String.fromCharCode(N);';
+                    append Helper [line] [indent] '}';
+                    append Helper [line] '}';
+                    Module.Add_Include Helper;
+                }
+            }
+        }
+    }
+    method flag Javascript_Browser
+    {
+        comment `browser-mode generation is selected by instantiating
+        Javascript_Browser_Compiler, whose constructor raises the class
+        flag. a class property rather than a document mark because
+        elements only link back to the parser, which knows nothing of the
+        compiler driving it`;
+        forgive
+        {
+            return [Javascript_Browser_Compiler.Browser_Mode];
+        }
+        return [false];
+    }
+    method void Javascript_Vfs_Include [object Module]
+    {
+        comment `the browser file system: a Map on globalThis that pages
+        preload with inputs and read outputs back from. one dedupe string
+        shared by the read, write and exists generators`;
+        string Helper 'function Gal_Vfs() {';
+        append Helper [line] [indent] 'if (!globalThis.Gal_Files) { globalThis.Gal_Files = new Map(); }';
+        append Helper [line] [indent] 'return globalThis.Gal_Files;';
+        append Helper [line] '}';
+        append Helper [line] 'function Gal_File_Read(N) {';
+        append Helper [line] [indent] 'if (!Gal_Vfs().has(N)) { throw new Error(`no such file ${ N }`); }';
+        append Helper [line] [indent] 'return Gal_Vfs().get(N);';
+        append Helper [line] '}';
+        append Helper [line] 'function Gal_File_Write(N, T) {';
+        append Helper [line] [indent] 'Gal_Vfs().set(N, T);';
+        append Helper [line] '}';
+        Module.Add_Include Helper;
+    }
+
+    method integer Javascript_Arg_Precedence [object Arg]
+    {
+        comment `the precedence table lives on the classification classes,
+        and an argument captured during top-down classification is still the
+        parse element, so the classification must be dereferenced. for an
+        already-classified object the dereference is the identity.`;
+        object C [Arg.Classification];
+        return [C.Javascript_Precedence];
+    }
+    method string Javascript_Repeating [string Oper]
+    {
+        object Argument;
+        string Arg;
+        string Code '';
+        flag First [true];
+        for each Argument in [my Arguments]
+        {
+            Arg = [Argument.Javascript];
+            integer P (i Javascript_Arg_Precedence Argument);
+            if (P > [my Javascript_Precedence])
+            {
+                Arg = (append '(' Arg ')');
+            }
+            else if ((P = [my Javascript_Precedence]) and (not First))
+            {
+                comment `equal precedence is only safe in the leftmost
+                position of a left-associative chain`;
+                Arg = (append '(' Arg ')');
+            }
+            if (Code sgt '')
+            {
+                append Code Oper;
+            }
+            append Code Arg;
+            First = [false];
+        }
+        return Code;
+    }
+    method string Javascript_Unary_Append [object Op1, string Oper]
+    {
+        string Arg [Op1.Javascript];
+        if ((i Javascript_Arg_Precedence Op1) >= [my Javascript_Precedence])
+        {
+            Arg = (append '(' Arg ')');
+        }
+        string Code Arg Oper;
+        return Code;
+    }
+}
+
+class set Statement
+{
+    method string Javascript_Block
+    {
+        string Code '';
+        forgive
+        {
+            if (not ([my Block Javascript] is null))
+            {
+                append Code [my Block Javascript];
+                return Code;
+            }
+        }
+        return (append [line] '{' [line] '}');
+    }
+}
+
+class set Operation
+{
+    method string Javascript_Numeric_Operand [object Op]
+    {
+        comment `a numeric operation converts a string-typed operand with
+        Number, because javascript's + would silently concatenate instead`;
+        string Code [Op.Javascript];
+        if ((i Javascript_Arg_Precedence Op) > [my Javascript_Precedence])
+        {
+            Code = (append '(' Code ')');
+        }
+        if ((i Javascript_Arg_Data_Type Op) s= 'string')
+        {
+            Code = (append 'globalThis.Number(' Code ')');
+        }
+        return Code;
+    }
+
+    method string Javascript_Numeric_Infix [object Op1, object Op2, string Infix]
+    {
+        string Code (i Javascript_Numeric_Operand Op1);
+        append Code Infix (i Javascript_Numeric_Operand Op2);
+        return Code;
+    }
+
+    method string Javascript_Numeric_Repeating [string Oper]
+    {
+        comment `the numeric chain converts string-typed operands the same
+        way Javascript_Numeric_Operand does, in every position of the chain`;
+        object Argument;
+        string Arg;
+        string Code '';
+        flag First [true];
+        for each Argument in [my Arguments]
+        {
+            Arg = [Argument.Javascript];
+            integer P (i Javascript_Arg_Precedence Argument);
+            if (P > [my Javascript_Precedence])
+            {
+                Arg = (append '(' Arg ')');
+            }
+            else if ((P = [my Javascript_Precedence]) and (not First))
+            {
+                Arg = (append '(' Arg ')');
+            }
+            if ((i Javascript_Arg_Data_Type Argument) s= 'string')
+            {
+                Arg = (append 'globalThis.Number(' Arg ')');
+            }
+            if (Code sgt '')
+            {
+                append Code Oper;
+            }
+            append Code Arg;
+            First = [false];
+        }
+        return Code;
+    }
+
+    method string Javascript_Infix [object Op1, object Op2, string Infix]
+    {
+        string Left [Op1.Javascript];
+        string Right [Op2.Javascript];
+        if ((i Javascript_Arg_Precedence Op1) > [my Javascript_Precedence])
+        {
+            Left = (append '(' Left ')');
+        }
+        if ((i Javascript_Arg_Precedence Op2) >= [my Javascript_Precedence])
+        {
+            comment `the right operand needs parentheses at equal precedence
+            too, because infix operators associate left: 10 - (4 - 3)`;
+            Right = (append '(' Right ')');
+        }
+        string Code Left Infix Right;
+        return Code;
+    }
+    method string Javascript_Unary [object Op1, string Oper]
+    {
+        string Arg [Op1.Javascript];
+        if ((i Javascript_Arg_Precedence Op1) >= [my Javascript_Precedence])
+        {
+            Arg = (append '(' Arg ')');
+        }
+        string Code Oper Arg;
+        return Code;
+    }
+}
+
+class set Syntax
+{
+    property string Unquoted;
+}
+
+
+generator Javascript Fallback
+{
+    generate Element
+    {
+        string Class_Name [class name];
+        string Input (i Get_Input);
+        error 'Class ' Class_Name " doesn't implement Infer_Javascript";
+    }
+    generate Token
+        [my Text];
+
+    generate Token_Quote
+        (i Javascript_Enquote [my Unquoted]);
+
+    generate Block
+    {
+        string Body '';
+        object Stmt;
+        string Between '';
+        for each Stmt in [my Statements]
+        {
+            append Body Between [Stmt.Javascript];
+            Between = [line];
+        }
+        Body = (i Javascript_Indent Body);
+        my Javascript_Statements = Body;
+        string Code [line]
+            '{' [line]
+            Body [line]
+            '}';
+        i = Code;
+    }
+
+    generate Statement_Say
+        'console.log(' (i Javascript_Append [my Arguments]) ');';
+
+    generate Statement_Readline
+    {
+        comment `string literals are prompts, names are input variables: each
+        name reads one line, carrying the prompt gathered since the last read.
+        node has no synchronous line reader, so the module gets a helper that
+        reads file descriptor zero byte by byte up to the newline`;
+        object Module (i Get_Module);
+        if (Module is null)
+        {
+            error 'readline statement must be inside a module';
+        }
+        if (i Javascript_Browser)
+        {
+            comment `no synchronous stdin exists in a browser page`;
+            string Bcode 'throw new Error("readline not available in the browser");';
+            i = Bcode;
+            return;
+        }
+        Module.Add_Include 'const fs = require("fs");';
+        string Helper 'function Gal_Readline() {';
+        append Helper [line] [indent] 'var Buf = Buffer.alloc(1);';
+        append Helper [line] [indent] 'var Bytes = [];';
+        append Helper [line] [indent] 'while (true) {';
+        append Helper [line] [indent] [indent] 'var N;';
+        append Helper [line] [indent] [indent] 'try { N = fs.readSync(0, Buf, 0, 1); } catch (E) { if (E.code === "EAGAIN") continue; throw E; }';
+        append Helper [line] [indent] [indent] 'if (N === 0) break;';
+        append Helper [line] [indent] [indent] 'if (Buf[0] === 10) break;';
+        append Helper [line] [indent] [indent] 'Bytes.push(Buf[0]);';
+        append Helper [line] [indent] '}';
+        append Helper [line] [indent] 'return Buffer.from(Bytes).toString("utf8");';
+        append Helper [line] '}';
+        Module.Add_Include Helper;
+        string Code '';
+        string Between '';
+        string Prompt '';
+        objects Arg Argc;
+        for each Arg in [my Arguments]
+        {
+            Argc = [Arg.Classification];
+            if (Argc is a Token_Quote)
+            {
+                if (Prompt sgt '')
+                {
+                    append Prompt ' + ';
+                }
+                append Prompt (Arg.Javascript_String);
+            }
+            else
+            {
+                if (Prompt sgt '')
+                {
+                    append Code Between 'process.stdout.write(' Prompt ');';
+                    Between = [line];
+                    Prompt = '';
+                }
+                append Code Between (Arg.Javascript_String) ' = Gal_Readline();';
+                Between = [line];
+            }
+        }
+        i = Code;
+    }
+
+    generate Statement_Main
+    {
+        if (i Javascript_Browser)
+        {
+            comment `a browser has no argv: main becomes a callable
+            function exported on globalThis; the page supplies the
+            arguments and exchanges file content through the Gal_Files
+            virtual file system`;
+            string Bcode '// main entry (browser)' [line];
+            append Bcode 'function Gal_Main(' (i Javascript_Args ', ') ')' [line] '{' [line];
+            object Bstmt;
+            for each Bstmt in [my Block Statements]
+            {
+                append Bcode [Bstmt.Javascript] [line];
+            }
+            append Bcode '}' [line] 'globalThis.Gal_Main = Gal_Main;';
+            i = Bcode;
+            return;
+        }
+        string Code '// main program' [line];
+        integer Sub 1;
+        string Args_Code '';
+        object Argument;
+        for each Argument in [my Listargs]
+        {
+            increment Sub;
+            append Args_Code 'var ' [Argument.Javascript] ' = process.argv[' (string Sub) '];' [line];
+        }
+        if ((llength [my Listargs]) > 0)
+        {
+            append Code 'if (process.argv.length <= ' (string Sub) ')' [line]
+                '{' [line]
+                [indent] 'console.log("Usage: node", process.argv[1], "' (i Javascript_Args ' ') '");' [line]
+                [indent] 'process.exit(1);' [line]
+                '}' [line]
+                Args_Code;
+        }
+        object Stmt;
+        for each Stmt in [my Block Statements]
+        {
+            append Code [Stmt.Javascript] [line];
+        }
+        i = Code;
+    }
+
+    generate Statement_Module
+    {
+        string Code "// module: " [my Name Javascript] [line];
+        string Include;
+        dictionary Exclude;
+        for each Include in [my Includes]
+        {
+            continue if (dict Exclude exists Include);
+            append Code Include [line];
+            Exclude Include d= [true];
+        }
+        object Stmt;
+        for each Stmt in [my Block Statements]
+        {
+            append Code [Stmt.Javascript] [line];
+        }
+        i = Code;
+    }
+
+    generate Program
+    {
+        string Code "";
+        object Stmt;
+        for each Stmt in [my Statements]
+        {
+            append Code [Stmt.Javascript] [line];
+        }
+        i = Code;
+    }
+
+    generate Statement_Append
+        Variable ' += '
+            (i Javascript_Append [my Listargs]) ';';
+    generate Statement_String
+    {
+        string Name [my Name Javascript];
+        string Code 'var ' Name ' = ';
+        if ((llength [my Listargs]) > 0)
+        {
+            append Code (i Javascript_Append [my Listargs]);
+        }
+        else
+        {
+            append Code "''";
+        }
+        append Code ';';
+        i = Code;
+    }
+
+    generate Declarations_Statement
+    {
+        object Arg;
+        string Code '';
+        string Between '';
+        for each Arg in [my Arguments]
+        {
+            append Code Between 'var ' [Arg.Javascript] ' = null;';
+            Between = [line];
+        }
+        i = Code;
+    }
+
+    generate Statement_If
+        "if (" Condition ")" (i Javascript_Block);
+
+    generate Statement_Else_If
+        "else if (" Condition ")" (i Javascript_Block);
+
+    generate Statement_Else
+        "else" Block;
+
+    generate Statement_Try
+        "try" Block;
+
+    generate Statement_Catch
+    {
+        string Code 'catch';
+        defined [my Error]
+        {
+            append Code ' (' [my Error Javascript] ')';
+        }
+        append Code [my Block Javascript];
+        i = Code;
+    }
+
+    generate Syntax_Null
+    {
+        my Unquoted = '';
+        i = 'null';
+    }
+
+    generate Syntax_True
+    {
+        my Unquoted = '1';
+        i = 'true';
+    }
+
+    generate Syntax_False
+    {
+        my Unquoted = '0';
+        i = 'false';
+    }
+
+    generate Syntax_Self
+        'this';
+
+    generate Syntax_Class_Name
+    {
+        string Object_Code 'this';
+        if (defined [my Object])
+        {
+            Object_Code = [my Object Javascript];
+        }
+        string Code
+            Object_Code
+            '.constructor.name';
+        i = Code;
+    }
+
+    generate Operation_New
+    {
+        comment `gal objects are wrapped in a proxy that throws on reads of
+        missing properties, mirroring python's AttributeError so that
+        forgive-guarded property reads take the same path in both chains.
+        writes and method calls pass through untouched`;
+        object Module (i Get_Module);
+        if (Module is null)
+        {
+            error 'new operation must be inside a module';
+        }
+        string Helper 'const Gal_Attr_Handler = {';
+        append Helper [line] [indent] 'get(T, P) {';
+        append Helper [line] [indent] [indent] 'if (typeof P === "symbol" || P in T) return T[P];';
+        append Helper [line] [indent] [indent] 'throw new TypeError(`AttributeError: ${ P }`);';
+        append Helper [line] [indent] '}';
+        append Helper [line] '};';
+        append Helper [line] 'function Gal_New(C, ...A) {';
+        append Helper [line] [indent] 'return new Proxy(new C(...A), Gal_Attr_Handler);';
+        append Helper [line] '}';
+        Module.Add_Include Helper;
+        string Code 'Gal_New(' [my Class_Name Javascript];
+        string Args (i Javascript_Args ', ');
+        if (Args sgt '')
+        {
+            append Code ', ' Args;
+        }
+        append Code ')';
+        i = Code;
+    }
+
+    generate Statement_Call
+    {
+        i Javascript_Runtime_Include [my Object];
+        string Code [my Object Javascript] '.' [my Method Javascript] '(' (i Javascript_Args ', ') ');';
+        i = Code;
+    }
+
+    generate Statement_Propset
+        Object '.' Property ' = ' Value ';';
+
+    generate Operation_Call
+    {
+        i Javascript_Runtime_Include [my Object];
+        string Code [my Object Javascript] '.' [my Method Javascript] '(' (i Javascript_Args ', ') ')';
+        i = Code;
+    }
+
+    generate Statement_List_Split
+    {
+        comment `split declares its target: var for a plain name (class
+        bodies are strict mode), plain assignment for a dotted target`;
+        string Variable [my Variable Javascript];
+        string Decl 'var ';
+        if (Variable contains '.')
+        {
+            Decl = '';
+        }
+        string Code Decl Variable ' = ' [my String Javascript] '.split(' [my Delimiter Javascript] ');';
+        i = Code;
+    }
+
+    generate Statement_I
+        'this.' Method '(' (i Javascript_Args ', ') ');';
+
+    generate Operation_I
+        'this.' Method '(' (i Javascript_Args ', ') ')';
+
+    generate Argument_Syntax
+    {
+        string Code [my Variable Javascript];
+        if (defined [my Default_Value])
+        {
+            append Code '=' [my Default_Value Javascript];
+        }
+        i= Code;
+    }
+    generate Operation_Add
+        (i Javascript_Numeric_Infix [my Op1] [my Op2] ' + ');
+    generate Operation_Minus
+    {
+        string Code;
+        if ((llength [my Arguments]) = 1)
+        {
+            Code = (i Javascript_Unary [my Op1] '-');
+        }
+        else
+        {
+            Code = (i Javascript_Numeric_Repeating ' - ');
+        }
+        i = Code;
+    }
+    generate Statement_Return
+    {
+        string Code 'return';
+        if (defined [my Value])
+        {
+            append Code ' ' [my Value Javascript];
+        }
+        append Code ';';
+        i = Code;
+    }
+    generate Statement_Return_If
+    {
+        string Condition [my Condition Javascript];
+        string Code 'if (' Condition ') return';
+        if [my Value]
+        {
+            append Code ' ' [my Value Javascript];
+        }
+        append Code ';';
+        i = Code;
+    }
+    generate Statement_If_Return
+    {
+        string Condition [my Condition Javascript];
+        string Code 'if (' Condition ') return';
+        if [my Value]
+        {
+            append Code ' ' [my Value Javascript];
+        }
+        append Code ';';
+        i = Code;
+    }
+    generate Syntax_My
+        'this.' (i Javascript_Arguments '.');
+
+    generate Statement_Method
+    {
+        string Code [my Name Javascript] '(';
+        string Args (i Javascript_Args ', ');
+        append Code Args ')' (i Javascript_Block);
+        i = Code;
+    }
+
+    generate Statement_Class
+    {
+        string Constructor '';
+        string Class_Properties '';
+        string Class_Methods '';
+        string Propinit '';
+        string Methods '';
+        objects S C;
+        for each S in [my Block Statements]
+        {
+            C = [S.Classification];
+            if (C is a Statement_Constructor)
+            {
+                append Constructor [S.Javascript] [line];
+            }
+            else if (C is a Statement_Class_Property)
+            {
+                append Class_Properties [C.Javascript] [line];
+            }
+            else if (C is a Statement_Class_Method)
+            {
+                append Class_Methods [C.Javascript] [line];
+            }
+            else if (C is a Statement_Property)
+            {
+                append Propinit [C.Javascript] [line];
+            }
+            else if (C is a Statement_Method)
+            {
+                append Methods [C.Javascript] [line];
+            }
+            else if (C is a Statement_Comment)
+            {
+                append Methods [C.Javascript] [line];
+            }
+            else
+            {
+                debug;
+            }
+        }
+        string Class_Body
+            Class_Properties
+            Propinit
+            Constructor
+            Class_Methods
+            Methods;
+        string Code 'class ' [my Class_Name Javascript];
+        if (defined [my Ancestor])
+        {
+            append Code ' extends ' [my Ancestor Javascript];
+        }
+        append Code [line] '{' [line]
+            (i Javascript_Indent Class_Body) [line]
+            '}';
+        i = Code;
+    }
+    generate Syntax_List
+        Variable;
+    generate Syntax_Dictionary
+        Variable;
+    generate Statement_List
+    {
+        string Code 'var ' [my Name Javascript] ' = [' (i Javascript_Args ', ') '];';
+        i = Code;
+    }
+    generate Statement_Global_List
+        'var ' [my Name Javascript] ' = [];';
+    generate Statement_Dictionary
+        'var ' [my Name Javascript] ' = new Map();';
+    generate Property_Statement
+    {
+        string Type [my Type Javascript];
+        string Name [my Name Javascript];
+        string Value 'null';
+        if (Type s= 'list')
+        {
+            Value = '[]';
+        }
+        else if ((substring Type 0 4) s= 'dict')
+        {
+            Value = 'new Map()';
+        }
+        forgive
+        {
+            Value = [my Value Javascript];
+        }
+        string Code Name ' = ' Value '; // ' Type;
+        i = Code;
+    }
+    generate Statement_Class_Property
+    {
+        string Type [my Type Javascript];
+        string Name [my Name Javascript];
+        string Value 'null';
+        if (Type s= 'list')
+        {
+            Value = '[]';
+        }
+        else if ((substring Type 0 4) s= 'dict')
+        {
+            Value = 'new Map()';
+        }
+        forgive
+        {
+            Value = [my Value Javascript];
+        }
+        string Code 'static ' Name ' = ' Value '; // class property ' Type;
+        i = Code;
+    }
+    generate Statement_Constructor
+    {
+        string Code 'constructor(';
+        string Args (i Javascript_Args ', ');
+        if (Args s> '')
+        {
+            append Code Args;
+        }
+        append Code ')' [line] '{' [line];
+        comment `an ancestor-less class gets no super call; a derived class
+        passes nothing to the parent constructor unless the body opens with
+        an explicit super statement, which then renders in place`;
+        object Cls = (i Get_Owner_Class);
+        string Has_Ancestor '';
+        forgive
+        {
+            comment `the dereference throws when Ancestor is unset (missing
+            attribute or null), under gal2- and gal3-built binaries alike`;
+            string Probe ([Cls.Ancestor].Get_Input);
+            Has_Ancestor = 'y';
+        }
+        string Explicit '';
+        string Misplaced '';
+        integer N 0;
+        object S;
+        forgive
+        {
+            for each S in [my Block Statements]
+            {
+                if ([S.Classification] is a Statement_Super)
+                {
+                    if (N > 0)
+                    {
+                        Misplaced = 'y';
+                    }
+                    Explicit = 'y';
+                }
+                increment N;
+            }
+        }
+        if (Misplaced sgt '')
+        {
+            comment `raised outside the forgive above, which would eat it`;
+            error 'super must be the first statement of the constructor';
+        }
+        if ((Has_Ancestor sgt '') and (Explicit seq ''))
+        {
+            append Code [indent] 'super();' [line];
+        }
+        try
+        {
+            append Code [my Block Javascript_Statements] [line];
+        }
+        catch
+        {
+            append Code '';
+        }
+        append Code '}';
+        i = Code;
+    }
+    generate Statement_Super
+        'super(' (i Javascript_Args ', ') ');';
+    generate Syntax_Is
+        Class_Name;
+    generate Statement_My_Equal
+        'this.' Property_Name ' = ' Value ';';
+    generate Operation_Defined
+        Variable ' != null';
+    generate Statement_Forgive
+        'try' (i Javascript_Block)
+        [line] 'catch { }';
+    generate Statement_For_Each
+        'for (' Item ' of ' List ')'
+            (i Javascript_Block);
+    generate Statement_For_Each_In
+        'for (' Item ' of ' List ')'
+            (i Javascript_Block);
+    generate Operation_Substring
+    {
+        string SVal [my String_Value Javascript];
+        string Start [my Start_Index Javascript];
+        string Code;
+        if (defined [my Length])
+        {
+            string Len [my Length Javascript];
+            if (Len s= '1')
+            {
+                Code = (append SVal '.at(' Start ')');
+            }
+            else
+            {
+                Code = (append SVal '.slice(' Start ', (' Start ') + (' Len '))');
+            }
+        }
+        else
+        {
+            Code = (append SVal '.slice(' Start ')');
+        }
+        i = Code;
+    }
+    generate Operation_Is_Null
+        '(' Op1 " == null || " Op1 " === '')";
+    generate Operation_Not_Null
+        '(' Op1 " != null && " Op1 " !== '')";
+    generate Statement_Dictionary_Assign
+        Dict '.set(' Subscript ', ' Value ');';
+    generate Declaration_Statement
+    {
+        string Variable [my Name Javascript];
+        string Value 'null';
+        forgive
+        {
+            Value = [my Value Javascript];
+        }
+        string Code 'var ' Variable ' = ' Value ';';
+        i = Code;
+    }
+    generate Operation_Length
+    {
+        comment `dictionaries are Maps, whose count lives in .size; strings
+        and lists keep .length`;
+        string Code '';
+        string T (i Javascript_Arg_Data_Type [my First]);
+        if ((substring T 0 4) s= 'dict')
+        {
+            append Code '(' [my First Javascript] ').size';
+        }
+        else
+        {
+            append Code '(' ([my First].Javascript_String) ').length';
+        }
+        i = Code;
+    }
+    generate Statement_Assign
+        Destination ' = ' Value ';';
+    generate Operation_String_Equal
+        ([my Op1].Javascript_String) ' == ' ([my Op2].Javascript_String);
+    generate Operation_Equal
+        (i Javascript_Infix [my Op1] [my Op2] ' == ');
+    generate Operation_Not_Equal
+        (i Javascript_Infix [my Op1] [my Op2] ' != ');
+    generate Operation_Contains
+        '(' String ').includes(' Search ')';
+    generate Operation_Not
+        (i Javascript_Unary [my Op1] '!');
+    generate Syntax_Indent
+    {
+        string Code "'    '";
+        my Unquoted = '    ';
+        defined [my Count]
+        {
+            append Code '.repeat(' [my Count Javascript] ')';
+            my Javascript_Precedence = 2;
+            my Unquoted = [null];
+        }
+        i = Code;
+    }
+    generate Syntax_Line
+    {
+        string Code "'\n'";
+        my Unquoted = [line];
+        defined [my Count]
+        {
+            append Code '.repeat(' [my Count Javascript] ')';
+            my Javascript_Precedence = 2;
+            my Unquoted = [null];
+        }
+        i = Code;
+    }
+    generate Syntax_Return
+    {
+        string Code "'\r'";
+        comment `the unquoted text must hold the real carriage return
+        character, like line and tab do; gal literals never process
+        escapes, so the two-character form poisoned appends`;
+        my Unquoted = (Runtime:Chr 13);
+        defined [my Count]
+        {
+            append Code '.repeat(' [my Count Javascript] ')';
+            my Javascript_Precedence = 2;
+            my Unquoted = [null];
+        }
+        i = Code;
+    }
+    generate Syntax_Tab
+    {
+        string Code "'\t'";
+        my Unquoted = [tab];
+        defined [my Count]
+        {
+            append Code '.repeat(' [my Count Javascript] ')';
+            my Javascript_Precedence = 2;
+            my Unquoted = [null];
+        }
+        i = Code;
+    }
+    generate Operation_Dict_Get
+        Dictionary '.get(' Key ')';
+    generate Statement_For_Range
+    {
+        string Variable [my Variable Javascript];
+        string Start [my Start Javascript];
+        string End [my End Javascript];
+        string Step (append Variable '++');
+        comment `mirror python's range(Start, End+1, Increment): ascending
+        runs through End inclusive; descending runs while the variable
+        exceeds End+1. a literal increment decides the direction at compile
+        time; a variable increment decides per iteration (note: unlike
+        python's range, the bounds re-evaluate each pass — fine for the
+        simple names the sources use)`;
+        string Test (append Variable ' <= ' End);
+        defined [my Increment]
+        {
+            string Inc [my Increment Javascript];
+            Step = (append Variable ' += ' Inc);
+            if ((substring Inc 0 1) s= '-')
+            {
+                Test = (append Variable ' > ' End '+1');
+            }
+            else if (not ([my Increment] is a Token_Number))
+            {
+                Test = (append '(' Inc ' > 0 ? ' Variable ' <= ' End ' : ' Variable ' > ' End '+1)');
+            }
+        }
+        string Decl 'var ';
+        if (Variable contains '.')
+        {
+            Decl = '';
+        }
+        string Code 'for (' Decl Variable ' = ' Start '; ' Test '; ' Step ')' (i Javascript_Block);
+        i = Code;
+    }
+    generate Operation_Append
+    {
+        string Code (i Javascript_Append [my Arguments]);
+        i = Code;
+    }
+    generate Operation_And
+    {
+        string Code (i Javascript_Infix [my Op1] [my Op2] ' && ');
+        object Extra;
+        string Extra_Text;
+        for each Extra in [my Listargs]
+        {
+            comment `chained operands: leftover operator keyword tokens alternate with the expressions beyond Op1 and Op2`;
+            Extra_Text = '';
+            if (Extra is a Token)
+            {
+                Extra_Text = [Extra.Text];
+            }
+            if ((Extra_Text s= 'and') or (Extra_Text s= '&'))
+            {
+                append Code ' && ';
+            }
+            else
+            {
+                append Code [Extra.Javascript];
+            }
+        }
+        i = Code;
+    }
+    generate Statement_Comment
+    {
+        string Text '';
+        object Argument;
+        for each Argument in [my Arguments]
+        {
+            if (Argument is a Token_Quote)
+            {
+                append Text [Argument.Unquoted];
+            }
+            else
+            {
+                string Piece (Argument.Get_Input);
+                forgive
+                {
+                    comment `a bracketed literal like [line] carries its real
+                    character in the classification's Unquoted property`;
+                    object AC [Argument.Classification];
+                    if ((AC is a Literal_Syntax) and (defined [AC.Unquoted]))
+                    {
+                        Piece = [AC.Unquoted];
+                    }
+                }
+                append Text Piece;
+            }
+        }
+        # 'quote openers would poison Element.Indent quote tracking downstream, replace with closing homoglyphs';
+        replace Text "'" '’';
+        replace Text '"' '”';
+        replace Text '`' '’';
+        replace Text '“' '”';
+        replace Text '‘' '’';
+        replace Text '«' '»';
+        replace Text '‹' '›';
+        string Code '';
+        lsplit Lines Text [line];
+        for each Text in Lines
+        {
+            if (Code sgt '')
+            {
+                append Code [line];
+            }
+            append Code '// ' Text;
+        }
+        i = Code;
+    }
+    generate Operation_Is_Ident
+        '"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_0123456789".includes(' Character ')';
+    generate Operation_Is_Whitespace
+        '" \n\r\t".includes(' Character ')';
+    generate Operation_Is_Upper
+        '(' [my First Javascript] ' === ' [my First Javascript] '.toUpperCase() && ' [my First Javascript] ' !== ' [my First Javascript] '.toLowerCase())';
+    generate Operation_Is_Lower
+        '(' [my First Javascript] ' === ' [my First Javascript] '.toLowerCase() && ' [my First Javascript] ' !== ' [my First Javascript] '.toUpperCase())';
+    generate Operation_Is_Numeric
+        "(typeof " Character " === 'number')";
+    generate Operation_Is_Punctuation
+        '/[!-\/:-@\[-\x60{-~]/.test(' Character ')';
+    generate Syntax_Property
+        (i Javascript_Repeating '.');
+
+    generate Operation_Is_A
+    {
+        string Object_Code [my Object Javascript];
+        string Code '';
+        string Between '';
+        object Arg;
+        for each Arg in [my Listargs]
+        {
+            append Code Between Object_Code ' instanceof ' [Arg.Javascript];
+            Between = ' || ';
+        }
+        Code = (append '(' Code ')');
+        i = Code;
+    }
+    generate Operation_Is_Not_A
+    {
+        string Object_Code [my Object Javascript];
+        string Code '';
+        string Between '';
+        object Arg;
+        for each Arg in [my Listargs]
+        {
+            append Code Between Object_Code ' instanceof ' [Arg.Javascript];
+            Between = ' || ';
+        }
+        Code = (append '(!(' Code '))');
+        i = Code;
+    }
+    generate Statement_Debug
+    {
+        comment `node has no resident debugger for unattended builds, so
+        reaching a debug marks an error; in the browser the devtools are
+        right there`;
+        string Code 'throw new Error("Debugger not implemented");';
+        if (i Javascript_Browser)
+        {
+            Code = 'debugger;';
+        }
+        i = Code;
+    }
+    generate Statement_Class_Method
+    {
+        string Code 'static ' [my Name Javascript] '(';
+        string Args (i Javascript_Args ', ');
+        append Code Args ')' (i Javascript_Block);
+        i = Code;
+    }
+    generate Operation_Or
+    {
+        string Code (i Javascript_Infix [my Op1] [my Op2] ' || ');
+        object Extra;
+        string Extra_Text;
+        for each Extra in [my Listargs]
+        {
+            comment `chained operands: leftover operator keyword tokens alternate with the expressions beyond Op1 and Op2`;
+            Extra_Text = '';
+            if (Extra is a Token)
+            {
+                Extra_Text = [Extra.Text];
+            }
+            if ((Extra_Text s= 'or') or (Extra_Text s= '|'))
+            {
+                append Code ' || ';
+            }
+            else
+            {
+                append Code [Extra.Javascript];
+            }
+        }
+        i = Code;
+    }
+    generate Statement_Push
+    {
+        string List [my List Javascript];
+        string Args (i Javascript_Args ', ');
+        string Code
+            List '.push(' Args ');';
+        i = Code;
+    }
+    generate Statement_Undefined
+    {
+        string Ifargs "";
+        object Argument;
+        for each Argument in [my Arguments]
+        {
+            append Ifargs 'if (' [Argument.Javascript] ' == null) { throw new Error("undefined"); }' [line];
+        }
+        Ifargs = (i Javascript_Indent Ifargs);
+        string Code 'try' [line]
+            '{' [line]
+            Ifargs
+            '}' [line]
+            'catch';
+        append Code (i Javascript_Block);
+        i = Code;
+    }
+    generate Syntax_My_Class
+        'this.constructor';
+    generate Statement_Continue
+        'continue;';
+    generate Statement_List_Copy
+    {
+        string Variable [my Target Javascript];
+        string Value '[]';
+        defined [my Source]
+        {
+            Value = (append [my Source Javascript] '.slice()');
+        }
+        comment `a plain name is a declaration and needs var (class bodies
+        are strict mode); a dotted target is a property assignment`;
+        string Decl 'var ';
+        if (Variable contains '.')
+        {
+            Decl = '';
+        }
+        string Code Decl Variable ' = ' Value ';';
+        i = Code;
+    }
+    generate Operation_Pop
+        List '.pop()';
+    generate Statement_Defined
+    {
+        string Ifargs "";
+        object Argument;
+        for each Argument in [my Arguments]
+        {
+            append Ifargs 'if (' [Argument.Javascript] ' == null) { throw new Error("undefined"); }' [line];
+        }
+        Ifargs = (i Javascript_Indent Ifargs);
+        string Block '';
+        forgive
+        {
+            Block = [my Block Javascript_Statements];
+        }
+        string Code 'try' [line]
+            '{' [line]
+            Ifargs
+            Block [line]
+            '}' [line]
+            'catch { }';
+        i = Code;
+    }
+    generate Statement_Join
+    {
+        comment `join declares its target, same var discipline as split`;
+        string Variable [my Variable Javascript];
+        string Decl 'var ';
+        if (Variable contains '.')
+        {
+            Decl = '';
+        }
+        string Code Decl Variable ' = ' [my List Javascript] '.join(' [my Delimiter Javascript] ');';
+        i = Code;
+    }
+    generate Operation_Split
+        [my String Javascript] '.split(' [my Delimiter Javascript] ')';
+    generate Operation_String_Not_Equal
+        ([my Op1].Javascript_String) ' != ' ([my Op2].Javascript_String);
+    generate Operation_String_Greater
+        ([my Op1].Javascript_String) ' > ' ([my Op2].Javascript_String);
+    generate Operation_String_Greater_Equal
+        ([my Op1].Javascript_String) ' >= ' ([my Op2].Javascript_String);
+    generate Operation_String_Less
+        ([my Op1].Javascript_String) ' < ' ([my Op2].Javascript_String);
+    generate Operation_String_Less_Equal
+        ([my Op1].Javascript_String) ' <= ' ([my Op2].Javascript_String);
+    generate Operation_Join
+        List '.join(' Separator ')';
+    generate Operation_List_Length
+        List '.length';
+    generate Operation_Greater
+        (i Javascript_Infix [my Op1] [my Op2] ' > ');
+    generate Operation_Greater_Equal
+        (i Javascript_Infix [my Op1] [my Op2] ' >= ');
+    generate Operation_Less
+        (i Javascript_Infix [my Op1] [my Op2] ' < ');
+    generate Operation_Less_Equal
+        (i Javascript_Infix [my Op1] [my Op2] ' <= ');
+    generate Operation_Dict_Exists
+        Dictionary '.has(' Key ')';
+    generate Operation_List_Get
+        List '[' Offset ']';
+    generate Operation_Shift
+        List '.shift()';
+    generate Operation_String
+        ([my Op1].Javascript_String);
+    generate Statement_Iterate
+        'for ([' Key_Variable ', ' Value_Variable '] of ' Dictionary ')' (i Javascript_Block);
+    generate Syntax_Colon
+        (i Javascript_Arguments '.');
+    generate Statement_Error
+        'throw new Error(' (i Javascript_Append [my Arguments]) ');';
+    generate Statement_Increment
+        (i Javascript_Unary_Append [my Destination] ' += 1') ';';
+    generate Statement_Decrement
+        (i Javascript_Unary_Append [my Destination] ' -= 1') ';';
+    generate Statement_Colon
+    {
+        i Javascript_Runtime_Include [my Class_Name];
+        string Code [my Class_Name Javascript] '.' [my Method_Name Javascript] '(' (i Javascript_Args ', ') ');';
+        i = Code;
+    }
+    generate Operation_Colon
+    {
+        i Javascript_Runtime_Include [my Class];
+        string Code [my Class Javascript] '.' [my Method Javascript] '(' (i Javascript_Args ', ') ')';
+        i = Code;
+    }
+    generate Operation_List_Last
+        List '.at(-1)';
+    generate Operation_Modulo
+        (i Javascript_Numeric_Infix [my Op1] [my Op2] ' % ');
+    generate Operation_Multiply
+        (i Javascript_Numeric_Infix [my Op1] [my Op2] ' * ');
+    generate Operation_Divide
+        (i Javascript_Numeric_Infix [my Op1] [my Op2] ' / ');
+    generate Operation_Python_Len
+        '(' [my Op1 Javascript] ').length';
+    generate Operation_Python_In
+        '(' [my Op2 Javascript] ').includes(' [my Op1 Javascript] ')';
+    generate Operation_Python_Is
+        (i Javascript_Infix [my Op1] [my Op2] ' === ');
+    generate Operation_Python_Is_Not
+        (i Javascript_Infix [my Op1] [my Op2] ' !== ');
+    generate Operation_Python_Subscript
+        [my Op1 Javascript] '[' [my Op2 Javascript] ']';
+    generate Operation_Python_Slice
+        [my Op1 Javascript] '.slice(' [my Op2 Javascript] ', ' [my Op3 Javascript] ')';
+    generate Operation_Python_List_Literal
+    {
+        string Code '[';
+        string Between '';
+        object Arg;
+        for each Arg in [my Arguments]
+        {
+            append Code Between [Arg.Javascript];
+            Between = ', ';
+        }
+        append Code ']';
+        i = Code;
+    }
+    generate Operation_Python_Tuple_Literal
+    {
+        string Code '[';
+        string Between '';
+        object Arg;
+        for each Arg in [my Arguments]
+        {
+            append Code Between [Arg.Javascript];
+            Between = ', ';
+        }
+        append Code ']';
+        i = Code;
+    }
+    generate Operation_Python_Dict_Literal
+        'new Map()';
+    generate Statement_Python_Setitem
+        [my Target Javascript] '[' [my Key Javascript] '] = ' [my Value Javascript] ';';
+    generate Syntax_Our
+        'this.' (i Javascript_Arguments '.');
+    generate Statement_Break
+        'break;';
+    generate Statement_Forever
+        'while (true)' (i Javascript_Block);
+    generate Operation_File_Exists
+    {
+        object Module (i Get_Module);
+        if (Module is null)
+        {
+            error 'file exists operation must be inside a module';
+        }
+        string Code '';
+        if (i Javascript_Browser)
+        {
+            i Javascript_Vfs_Include Module;
+            append Code 'Gal_Vfs().has(' [my Path Javascript] ')';
+        }
+        else
+        {
+            Module.Add_Include 'const fs = require("fs");';
+            append Code 'fs.existsSync(' [my Path Javascript] ')';
+        }
+        i = Code;
+    }
+    generate Statement_File_Read
+    {
+        object Module (i Get_Module);
+        if (Module is null)
+        {
+            error 'file read statement must be inside a module';
+        }
+        string Code '';
+        if (i Javascript_Browser)
+        {
+            i Javascript_Vfs_Include Module;
+            append Code [my Variable Javascript] ' = Gal_File_Read(' [my File_Name Javascript] ');';
+        }
+        else
+        {
+            Module.Add_Include 'const fs = require("fs");';
+            append Code [my Variable Javascript] ' = fs.readFileSync(' [my File_Name Javascript] ", 'utf-8');";
+        }
+        i = Code;
+    }
+    generate Statement_Add
+        Destination ' += ' Increment ';';
+    generate Statement_Replace
+        Variable ' = ' Variable '.replaceAll(' Search_Text ', ' Replace_Text ');';
+    generate Statement_Lists
+    {
+        string Code '';
+        string Between '';
+        object Arg;
+        for each Arg in [my Arguments]
+        {
+            append Code Between 'var ' [Arg.Javascript] ' = [];';
+            Between = [line];
+        }
+        i = Code;
+    }
+    generate Statement_Dictionaries
+    {
+        string Code '';
+        string Between '';
+        object Arg;
+        for each Arg in [my Arguments]
+        {
+            append Code Between 'var ' [Arg.Javascript] ' = new Map();';
+            Between = [line];
+        }
+        i = Code;
+    }
+    generate Statement_Strings
+    {
+        string Code '';
+        string Between '';
+        object Arg;
+        for each Arg in [my Arguments]
+        {
+            append Code Between 'var ' [Arg.Javascript] " = '';";
+            Between = [line];
+        }
+        i = Code;
+    }
+    generate Statement_Write_To
+    {
+        object Module (i Get_Module);
+        if (Module is null)
+        {
+            error 'write to statement must be inside a module';
+        }
+        string Code '';
+        if (i Javascript_Browser)
+        {
+            i Javascript_Vfs_Include Module;
+            append Code 'Gal_File_Write(' [my File Javascript] ', ' ([my Text].Javascript_String) ');';
+        }
+        else
+        {
+            Module.Add_Include 'const fs = require("fs");';
+            append Code 'fs.writeFileSync(' [my File Javascript] ', ' ([my Text].Javascript_String) ');';
+        }
+        i = Code;
+    }
+    generate Statement_List_Clear
+        List '.length = 0;';
+}
+
+class Javascript_Compiler is Fallback_Compiler
+{
+    constructor
+    {
+        my Generator = (new Javascript_Generator [self]);
+    }
+
+    method void Print_Errors
+    {
+        object E;
+        for each E in [my Elements]
+        {
+            if (not ([E.Error] is null))
+            {
+                say [line]
+                    [class name [E.Classification]]
+                    ': '
+                    (substring (E.Get_Input) 0 80);
+                say "ERROR: " [E.Error];
+            }
+        }
+    }
+    method number Infer_Code
+    {
+        verbosity;
+        verbose "Javascript_Compiler.Infer_Code: starting code generation";
+        number Status 1;
+
+        [my Generator Elements] = [my Elements];
+        Status = ([my Generator].Infer_Gal);
+        if (not Status)
+        {
+            i Print_Errors;
+            say "Error in Javascript Inference, inferring gal";
+            return 0;
+        }
+        Status = ([my Generator].Infer_Fallback);
+        if (not Status)
+        {
+            i Print_Errors;
+            say "Error in Javascript Inference, inferring fallback";
+            return 0;
+        }
+
+        verbose "Javascript_Compiler.Infer_Code: calling Generator.Infer_Javascript";
+
+        # 'Call Infer_Javascript to generate the code';
+        [my Generator].Infer_Javascript;
+
+        # 'Get the top-level program element';
+        object Top = (llast [my Elements]);
+
+        verbose "Javascript_Compiler.Infer_Code: ensuring Top element has javascript code";
+
+        verbose (Top.To_String);
+        try
+        {
+            if ([Top.Javascript] is null)
+            {
+                Top.Infer_Javascript;
+            }
+        }
+        catch Error
+        {
+            i Print_Errors;
+            say "Error in Javascript Inference, inferring javascript";
+            return 0;
+        }
+
+        string Code = [Top.Javascript];
+        my Javascript = Code;
+
+        verbose "Javascript_Compiler.Infer_Code: successfully generated javascript code";
+
+        return 1;
+    }
+}
+
+class Javascript_Browser_Compiler is Javascript_Compiler
+{
+    comment `same backend, browser dialect: generators that would reach for
+    node (fs, process, require) consult Browser_Mode through the
+    Javascript_Browser probe and emit the Gal_Files virtual file system, a
+    callable exported main, and debugger; for debug;. the flag is
+    process-global: hosts that alternate node- and browser-mode compiles
+    in one process must reset it between stages (web_main does)`;
+    class property flag Browser_Mode [false];
+    constructor
+    {
+        Javascript_Browser_Compiler.Browser_Mode = [true];
+    }
+}

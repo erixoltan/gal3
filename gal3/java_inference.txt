@@ -1,0 +1,3993 @@
+flowerbox 'java inference: a java generator covering the five-languages program contract';
+
+comment `
+The java backend, built for the five-languages article: it must compile the
+five contract programs (hello, fizzbuzz, bank, receipt, checkout) and fail
+loudly beyond them, per the c_inference.txt philosophy.
+
+3.2 promotion in progress (docs/java_selfhost_design.md): this backend is
+growing toward the full 1:1 mirror of python_inference.txt so the compiler
+itself can run on the jvm. fail-loudly stays the rule for anything not yet
+ported.
+
+java is the managed-vm point on the spectrum: everything lives in a class,
+so the interesting mappings are module -> the public class holding
+public static void main, gal class -> a package-private sibling class in
+the same file (java only restricts PUBLIC classes to one per file),
+dict -> HashMap with the value type read from the first sibling d=
+assignment, list -> List.of, say and append -> string concatenation with
++ (java converts any operand adjacent to a string), and a string operand
+in a numeric operation -> an inline Integer.parseInt or Double.parseDouble,
+which unlike go needs no helper because it is a plain expression.
+
+imports collect in class-level registries on Element, exactly as the go
+backend does, and the Program generator emits the import lines first.
+helper functions are rare (only readline needs one, a shared Scanner);
+they collect into a package-private Gal class appended after everything
+else, so any class in the file can call Gal.readline().
+
+the public class must live in a file named after it, so the driver of the
+oracle names the output file after the module.
+`;
+
+class set Element
+{
+    property string Java;
+    property string Java_Statements '';
+    class property list Java_Imports;
+    class property dictionary Java_Import_Set;
+    class property list Java_Helpers;
+    class property dictionary Java_Helper_Set;
+    class property dictionary Java_Fields;
+    class property dictionary Java_Class_Ancestors;
+    class property dictionary Java_Methods;
+    class property dictionary Java_Ctor_Args;
+    class property dictionary Java_Method_Args;
+    class property list Java_Field_Keys;
+    class property dictionary Java_Classes;
+    property string Java_Static_Type '';
+    property string Java_Set_Object '';
+    property string Java_Set_Name '';
+    property dictionary Java_Locals;
+
+    method void Java_Import [string Path]
+    {
+        return if ([my Java_Import_Set] dexists Path);
+        push [my Java_Imports] Path;
+        [my Java_Import_Set] Path d= [true];
+    }
+
+    method void Java_Helper [string Code]
+    {
+        return if ([my Java_Helper_Set] dexists Code);
+        push [my Java_Helpers] Code;
+        [my Java_Helper_Set] Code d= [true];
+    }
+
+    method string Java_Arg_Data_Type [object Arg]
+    {
+        forgive
+        {
+            object AC [Arg.Classification];
+            string T [AC.Data_Type];
+            return '' if (T is an Element);
+            return T;
+        }
+        return '';
+    }
+
+    method string Java_Type [string T]
+    {
+        return 'int' if (T s= 'integer');
+        return 'double' if (T s= 'number');
+        return 'String' if (T s= 'string');
+        return 'boolean' if (T s= 'flag');
+        return 'Object' if (T s= 'object');
+        return 'Object' if (T s= 'variant');
+        if (T s= 'list')
+        {
+            i Java_Import 'java.util.List';
+            i Java_Import 'java.util.ArrayList';
+            return 'List<Object>';
+        }
+        if (T s= 'dictionary')
+        {
+            i Java_Import 'java.util.HashMap';
+        i Java_Import 'java.util.LinkedHashMap';
+            return 'HashMap<String, Object>';
+        }
+        error 'java generator: no java type for gal type ' T;
+    }
+
+    method string Java_Boxed_Type [string T]
+    {
+        comment `the wrapper type for generic positions like
+        HashMap values and List elements`;
+        return 'Integer' if (T s= 'integer');
+        return 'Double' if (T s= 'number');
+        return 'String' if (T s= 'string');
+        return 'Boolean' if (T s= 'flag');
+        return 'Object' if (T s= 'object');
+        return 'Object' if (T s= 'variant');
+        error 'java generator: no boxed java type for gal type ' T;
+    }
+
+    method string Java_Value_Type [object Arg]
+    {
+        comment `the boxed java type of a literal or typed argument, used
+        to give maps and lists their element types`;
+        forgive
+        {
+            object AC [Arg.Classification];
+            if (AC is a Token_Quote)
+            {
+                return 'String';
+            }
+            if (AC is a Token_Number)
+            {
+                if ([AC.Text] contains '.')
+                {
+                    return 'Double';
+                }
+                return 'Integer';
+            }
+            string DT [AC.Data_Type];
+            if (not (DT is an Element))
+            {
+                return (i Java_Boxed_Type DT);
+            }
+        }
+        error 'java generator: cannot infer a java type for ' (Arg.Get_Input);
+    }
+
+    method string Java_Escape [string Text]
+    {
+        if (Text contains '\')
+        {
+            replace Text '\' '\\';
+        }
+        if (Text contains '"')
+        {
+            replace Text '"' '\"';
+        }
+        if (Text contains [tab])
+        {
+            replace Text [tab] '\t';
+        }
+        if (Text contains [line])
+        {
+            replace Text [line] '\n';
+        }
+        string CR (Runtime:Chr 13);
+        comment `a real carriage return via the runtime, not the [return]
+        literal: gal2 (the bootstrap) has no python generator for it`;
+        if (Text contains CR)
+        {
+            replace Text CR '\r';
+        }
+        return Text;
+    }
+
+    method string Java_Quote [string Text]
+    {
+        return (append '"' (i Java_Escape Text) '"');
+    }
+
+    method string Java_Args [string Separator]
+    {
+        object Arg;
+        string Args_Java '';
+        string Between '';
+        for each Arg in [my Listargs]
+        {
+            if (not (defined [Arg.Java]))
+            {
+                error 'Argument Java not defined: ' [Arg.Gal];
+            }
+            append Args_Java Between [Arg.Java];
+            = Between Separator;
+        }
+        return Args_Java;
+    }
+
+    method string Java_Arguments [string Separator]
+    {
+        object Arg;
+        string Args_Java '';
+        string Between '';
+        for each Arg in [my Arguments]
+        {
+            if (not (defined [Arg.Java]))
+            {
+                error 'Argument Java not defined: ' [Arg.Gal];
+            }
+            append Args_Java Between [Arg.Java];
+            = Between Separator;
+        }
+        return Args_Java;
+    }
+
+    method string Java_Default [string JT]
+    {
+        comment `the field or variable initializer for a java type when the
+        declaration carries no value`;
+        return '0' if (JT s= 'int');
+        return '0.0' if (JT s= 'double');
+        return 'false' if (JT s= 'boolean');
+        return '""' if (JT s= 'String');
+        return 'new ArrayList<>()' if ((substring JT 0 5) s= 'List<');
+        return 'new LinkedHashMap<>()' if ((substring JT 0 8) s= 'HashMap<');
+        return 'null';
+    }
+
+    method string Java_Property [string Prefix]
+    {
+        string JT (i Java_Type [my Type Java]);
+        forgive
+        {
+            comment `the registry may have widened this field to Object
+            because a re-declaration elsewhere in the chain disagrees`;
+            i Java_Build_Registry;
+            string OCN2 (i Java_Owner_Class_Name);
+            object PNE3 [my Name];
+            string FT3 (i Java_Field_Type OCN2 (PNE3.Get_Input));
+            if (FT3 sgt '')
+            {
+                JT = FT3;
+            }
+        }
+        string V '';
+        forgive
+        {
+            if (not ([my Value] is null))
+            {
+                V = [my Value Java];
+            }
+        }
+        if (V seq '')
+        {
+            comment `python materializes undefaulted properties as None
+            (lists and dictionaries as empty collections); java mirrors
+            with null, boxing primitive types so null fits — the
+            definedness guards depend on it`;
+            V = 'null';
+            if (JT s= 'int')
+            {
+                JT = 'Integer';
+            }
+            else if (JT s= 'double')
+            {
+                JT = 'Double';
+            }
+            else if (JT s= 'boolean')
+            {
+                JT = 'Boolean';
+            }
+            else if ((substring JT 0 5) s= 'List<')
+            {
+                V = 'new ArrayList<>()';
+            }
+            else if ((substring JT 0 8) s= 'HashMap<')
+            {
+                V = 'new LinkedHashMap<>()';
+            }
+        }
+        return (append Prefix JT ' ' [my Name Java] ' = ' V ';');
+    }
+
+    method string Java_Method [string Prefix]
+    {
+        string RT (i Java_Effective_Return_Type);
+        string Ret '';
+        if (RT sne 'void')
+        {
+            Ret = 'return ';
+        }
+        string Name [my Name Java];
+        string Code (append Prefix RT ' ' Name '(' (i Java_Params) ')');
+        string Inner '';
+        forgive
+        {
+            Inner = [my Block Java_Statements];
+        }
+        string Block_Code (append ' {' [line] (i Indent (append (i Java_Hoist) Inner)) '}');
+        if (RT sne 'void')
+        {
+            comment `python methods fall off the end and return None; java
+            needs an explicit return unless the last statement already
+            leaves (a trailing return would then be unreachable)`;
+            flag Ends [false];
+            forgive
+            {
+                object LS (llast [my Block Statements]);
+                object LC [LS.Classification];
+                comment `error throws are wrapped in if (true), so java
+                still wants a trailing return after them; only a real
+                return or an infinite loop ends the method`;
+                if ((LC is a Statement_Return) or (LC is a Statement_Forever))
+                {
+                    Ends = [true];
+                }
+            }
+            if (not Ends)
+            {
+                string Dflt 'null';
+                if (RT s= 'int')
+                {
+                    Dflt = '0';
+                }
+                else if (RT s= 'double')
+                {
+                    Dflt = '0.0';
+                }
+                else if (RT s= 'boolean')
+                {
+                    Dflt = 'false';
+                }
+                Block_Code = (append ' {' [line] (i Indent (append (i Java_Hoist) Inner 'return ' Dflt ';' [line])) '}');
+            }
+        }
+        append Code Block_Code;
+        append Code (i Java_Default_Overloads (append Prefix RT ' ' Name) Name Ret);
+        return Code;
+    }
+
+    method string Java_Default_Overloads [string Head, string Call, string Ret]
+    {
+        comment `java has no argument defaults, so a signature with trailing
+        defaulted parameters emits one shorter delegating overload per
+        default, each filling the tail with nulls. Head is the overload
+        signature prefix (class name, or return-type-space-name), Call the
+        delegation target (this, or the method name), Ret 'return ' when the
+        result passes through`;
+        integer Total (llength [my Listargs]);
+        integer First_Default Total;
+        integer Index 0;
+        object Arg;
+        for each Arg in [my Listargs]
+        {
+            flag Has_Default [false];
+            forgive
+            {
+                object AC [Arg.Classification];
+                if (not ([AC.Default_Value] is null))
+                {
+                    Has_Default = [true];
+                }
+            }
+            if Has_Default
+            {
+                if (First_Default = Total)
+                {
+                    First_Default = Index;
+                }
+            }
+            else
+            {
+                if (First_Default < Total)
+                {
+                    error 'java generator: a non-trailing argument default';
+                }
+            }
+            Index = (Index + 1);
+        }
+        string Out '';
+        integer Cut First_Default;
+        forever
+        {
+            if (Cut >= Total)
+            {
+                break;
+            }
+            string Params '';
+            string Callargs '';
+            string Between '';
+            integer J 0;
+            object A2;
+            for each A2 in [my Listargs]
+            {
+                if (J < Cut)
+                {
+                    append Params Between (i Java_Param_Decl A2);
+                    append Callargs Between (i Java_Param_Name A2);
+                }
+                else
+                {
+                    append Callargs Between 'null';
+                }
+                Between = ', ';
+                J = (J + 1);
+            }
+            append Out [line] Head '(' Params ') {' [line]
+                [indent] Ret Call '(' Callargs ');' [line] '}';
+            Cut = (Cut + 1);
+        }
+        return Out;
+    }
+
+    method string Java_Class_Ref [string Name]
+    {
+        comment `gal class names that collide with implicitly visible java
+        types take a Gal_ prefix, at the declaration and at every
+        class-name use site`;
+        return (append 'Gal_' Name) if (Name s= 'String');
+        return (append 'Gal_' Name) if (Name s= 'Integer');
+        return (append 'Gal_' Name) if (Name s= 'Number');
+        return (append 'Gal_' Name) if (Name s= 'Character');
+        return (append 'Gal_' Name) if (Name s= 'List');
+        return Name;
+    }
+
+    method flag Java_Reflected [string Code]
+    {
+        comment `reflective results are Object-typed; the Gal. prefix marks
+        them for the coercion helpers`;
+        if ((substring Code 0 6) s= 'galrt.')
+        {
+            return [true];
+        }
+        return [false];
+    }
+
+    method string Java_Coerce [string Code, string JT]
+    {
+        comment `casts a reflected (Object-typed) expression into the java
+        type a typed sink needs; anything already typed passes through`;
+        if (not (i Java_Reflected Code))
+        {
+            return Code;
+        }
+        return (append '((java.lang.Number) ' Code ').intValue()') if (JT s= 'int');
+        return (append '((java.lang.Number) ' Code ').doubleValue()') if (JT s= 'double');
+        return (append '((Boolean) ' Code ')') if (JT s= 'boolean');
+        return (append '((String) ' Code ')') if (JT s= 'String');
+        return (append '((java.util.List<Object>) ' Code ')') if ((substring JT 0 5) s= 'List<');
+        return (append '((java.util.HashMap<String, Object>) ' Code ')') if ((substring JT 0 8) s= 'HashMap<');
+        return Code;
+    }
+
+    method string Java_Iterable [string Code]
+    {
+        return (i Java_Coerce Code 'List<Object>');
+    }
+
+    method string Java_Dict [string Code]
+    {
+        return (i Java_Coerce Code 'HashMap<String, Object>');
+    }
+
+    method string Java_Each_Of [object E]
+    {
+        comment `a for-each source: python iterates strings by character,
+        so anything not statically list-typed goes through Gal.each, which
+        handles both at run time`;
+        string Code [E.Java];
+        string T (i Java_Arg_Data_Type E);
+        return Code if (T s= 'list');
+        i Java_Helper (append 'static java.util.List<Object> each(Object x) {' [line]
+            [indent] 'if (x instanceof String s) {' [line]
+            [indent] [indent] 'var r = new java.util.ArrayList<Object>();' [line]
+            [indent] [indent] 'for (int i = 0; i < s.length(); i++) r.add(s.substring(i, i + 1));' [line]
+            [indent] [indent] 'return r;' [line]
+            [indent] '}' [line]
+            [indent] 'return (java.util.List<Object>) x;' [line] '}');
+        return (append 'galrt.each(' Code ')');
+    }
+
+    method string Java_List_Of [object E]
+    {
+        comment `a list-op receiver: list-typed expressions pass through
+        (they keep their element type); anything Object-typed casts`;
+        string Code [E.Java];
+        string T (i Java_Arg_Data_Type E);
+        return Code if (T s= 'list');
+        return (append '((java.util.List<Object>)(java.util.List<?>) ' Code ')');
+    }
+
+    method string Java_Dict_Of [object E]
+    {
+        string Code [E.Java];
+        string T (i Java_Arg_Data_Type E);
+        return Code if (T s= 'dictionary');
+        return (append '((java.util.HashMap<String, Object>)(java.util.Map<?, ?>) ' Code ')');
+    }
+
+    method string Java_Cast_Code [string Code, string JT]
+    {
+        comment `an unconditional conversion into a java type; redundant
+        casts are legal, and numbers route through Number to survive
+        boxing`;
+        if ((JT s= 'int') or (JT s= 'double'))
+        {
+            i Java_Helper (append 'static double num(Object x) {' [line]
+                [indent] 'if (x instanceof Boolean b) return b ? 1 : 0;' [line]
+                [indent] 'if (x instanceof String s) return Double.parseDouble(s.trim());' [line]
+                [indent] 'return ((java.lang.Number) x).doubleValue();' [line] '}');
+        }
+        return (append '((int) galrt.num(' Code '))') if (JT s= 'int');
+        return (append 'galrt.num(' Code ')') if (JT s= 'double');
+        if (JT s= 'boolean')
+        {
+            i Java_Reflection_Runtime;
+            return (append 'galrt.truthy(' Code ')');
+        }
+        return (append '((String) ' Code ')') if (JT s= 'String');
+        return (append '((java.util.List<Object>)(java.util.List<?>) ' Code ')') if ((substring JT 0 5) s= 'List<');
+        return (append '((java.util.HashMap<String, Object>)(java.util.Map<?, ?>) ' Code ')') if ((substring JT 0 8) s= 'HashMap<');
+        comment `any other sink type (a gal class) takes a plain cast;
+        redundant casts are legal`;
+        return (append '((' JT ') ' Code ')') if (JT sgt '');
+        return Code;
+    }
+
+    method string Java_Cast [object VE, string JT]
+    {
+        comment `casts a value expression to the sink's java type unless
+        its inferred data type already matches`;
+        string Code [VE.Java];
+        string T (i Java_Arg_Data_Type VE);
+        if (not (i Java_Reflected Code))
+        {
+            return Code if ((JT s= 'int') and (T s= 'integer'));
+            return Code if ((JT s= 'double') and ((T s= 'number') or (T s= 'integer')));
+            return Code if ((JT s= 'boolean') and (T s= 'flag'));
+        }
+        comment `string, list and dictionary data types are not trusted:
+        probe variables carry those inferences while declaring as Object,
+        and the redundant cast is legal either way`;
+        return (i Java_Cast_Code Code JT);
+    }
+
+    method void Java_Build_Registry
+    {
+        comment `one walk over the element list collects every declared
+        property (keyed ClassName.PropName, valued by its java type) and
+        every class ancestor, so member access can choose typed direct
+        emission over reflection`;
+        return if ([my Java_Fields] dexists '@built');
+        [my Java_Fields] '@built' d= 'y';
+        forgive
+        {
+            object Doc [my Document];
+            object E;
+            for each E in [Doc.Elements]
+            {
+                forgive
+                {
+                    object C [E.Classification];
+                    if (C is a Statement_Class)
+                    {
+                        object CNE [C.Class_Name];
+                        string CN (CNE.Get_Input);
+                        [my Java_Classes] CN d= 'y';
+                        forgive
+                        {
+                            object ANE [C.Ancestor];
+                            string AN (ANE.Get_Input);
+                            if (AN sgt '')
+                            {
+                                [my Java_Class_Ancestors] CN d= AN;
+                            }
+                        }
+                    }
+                    else if (C is a Property_Statement)
+                    {
+                        object OC (C.Get_Owner_Class);
+                        object ONE [OC.Class_Name];
+                        string OCN (ONE.Get_Input);
+                        object PNE [C.Name];
+                        string PN (PNE.Get_Input);
+                        string JT 'Object';
+                        forgive
+                        {
+                            object PTE [C.Type];
+                            JT = (i Java_Type (PTE.Get_Input));
+                        }
+                        [my Java_Fields] (append OCN '.' PN) d= JT;
+                        push [my Java_Field_Keys] (append OCN '.' PN);
+                    }
+                    else if (C is a Method_Statement)
+                    {
+                        object OC2 (C.Get_Owner_Class);
+                        object ONE2 [OC2.Class_Name];
+                        object MNE [C.Name];
+                        [my Java_Methods] (append (ONE2.Get_Input) '.' (MNE.Get_Input)) d= (C.Java_Method_Return_Type);
+                        [my Java_Method_Args] (append (ONE2.Get_Input) '.' (MNE.Get_Input)) d= [C.Listargs];
+                    }
+                    else if (C is a Statement_Constructor)
+                    {
+                        object OC3 (C.Get_Owner_Class);
+                        object ONE3 [OC3.Class_Name];
+                        [my Java_Ctor_Args] (ONE3.Get_Input) d= [C.Listargs];
+                    }
+                    comment `locals pre-pass: loop variables and function
+                    parameters register on their owner function up front,
+                    because generation is post-order (a loop body
+                    generates before its for-each statement) and the
+                    class-name-versus-local disambiguation needs them`;
+                    if (C is a Declaration_Statement)
+                    {
+                        comment `scalar locals pre-register so a same-name
+                        redeclaration with a different type widens the
+                        hoisted variable to Object up front (python has one
+                        function-scoped variable)`;
+                        forgive
+                        {
+                            object MD (C.Java_Owner_Method);
+                            if (not (MD is null))
+                            {
+                                string KW '';
+                                object KWE [C.Keyword];
+                                if (KWE is an Element)
+                                {
+                                    KW = (KWE.Get_Input);
+                                }
+                                else
+                                {
+                                    KW = KWE;
+                                }
+                                string DJT '';
+                                if ((KW s= 'integer') or (KW s= 'int'))
+                                {
+                                    DJT = 'int';
+                                }
+                                else if (KW s= 'number')
+                                {
+                                    DJT = 'double';
+                                }
+                                else if (KW s= 'flag')
+                                {
+                                    DJT = 'boolean';
+                                }
+                                else if (KW s= 'object')
+                                {
+                                    DJT = 'Object';
+                                }
+                                if (DJT sgt '')
+                                {
+                                    object DNE [C.Name];
+                                    string DN2 (DNE.Get_Input);
+                                    if (not ([MD.Java_Locals] dexists DN2))
+                                    {
+                                        [MD.Java_Locals] DN2 d= DJT;
+                                    }
+                                    else
+                                    {
+                                        string EX ([MD.Java_Locals] dget DN2);
+                                        if ((EX sgt '') and ((EX sne DJT) and (EX sne '@param')))
+                                        {
+                                            [MD.Java_Locals] DN2 d= 'Object';
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if ((C is a Statement_For_Each) or (C is a Statement_For_Each_In))
+                    {
+                        forgive
+                        {
+                            object MF (C.Java_Owner_Method);
+                            object IE [C.Item];
+                            string IN (IE.Get_Input);
+                            if (not ([MF.Java_Locals] dexists IN))
+                            {
+                                [MF.Java_Locals] IN d= (i Java_Loop_Var_Type IE);
+                            }
+                        }
+                    }
+                    if (C is a Statement_Iterate)
+                    {
+                        forgive
+                        {
+                            object MI (C.Java_Owner_Method);
+                            object KE [C.Key_Variable];
+                            string KN (KE.Get_Input);
+                            if (not ([MI.Java_Locals] dexists KN))
+                            {
+                                [MI.Java_Locals] KN d= (i Java_Loop_Var_Type KE);
+                            }
+                            object VE2 [C.Value_Variable];
+                            string VN (VE2.Get_Input);
+                            if (not ([MI.Java_Locals] dexists VN))
+                            {
+                                [MI.Java_Locals] VN d= (i Java_Loop_Var_Type VE2);
+                            }
+                        }
+                    }
+                    if (C is a Statement_For_Range)
+                    {
+                        forgive
+                        {
+                            object MR (C.Java_Owner_Method);
+                            object RE [C.Variable];
+                            string RN (RE.Get_Input);
+                            if (not ([MR.Java_Locals] dexists RN))
+                            {
+                                [MR.Java_Locals] RN d= 'int';
+                            }
+                        }
+                    }
+                    if ((C is a Function_Statement) or (C is a Statement_Constructor))
+                    {
+                        forgive
+                        {
+                            object PA;
+                            for each PA in [C.Listargs]
+                            {
+                                forgive
+                                {
+                                    string PN2 '';
+                                    forgive
+                                    {
+                                        object PAC [PA.Classification];
+                                        object PVE [PAC.Variable];
+                                        PN2 = (PVE.Get_Input);
+                                    }
+                                    if (PN2 seq '')
+                                    {
+                                        PN2 = (PA.Get_Input);
+                                    }
+                                    if (not ([C.Java_Locals] dexists PN2))
+                                    {
+                                        [C.Java_Locals] PN2 d= '@param';
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        i Java_Widen_Fields;
+    }
+
+    method void Java_Widen_Fields
+    {
+        comment `a property re-declared below an ancestor shares the
+        ancestor's single java field (fields shadow, they do not
+        override), so when the declared types disagree anywhere in a
+        chain, every declaration in that chain widens to Object`;
+        string FK;
+        for each FK in [my Java_Field_Keys]
+        {
+            forgive
+            {
+                object PL (split FK '.');
+                string FCls (lget PL 0);
+                string FProp (lget PL 1);
+                string Own_T ([my Java_Fields] dget FK);
+                string C3 FCls;
+                integer D3 0;
+                forever
+                {
+                    if (D3 > 30)
+                    {
+                        break;
+                    }
+                    D3 = (D3 + 1);
+                    if (not ([my Java_Class_Ancestors] dexists C3))
+                    {
+                        break;
+                    }
+                    C3 = ([my Java_Class_Ancestors] dget C3);
+                    string AK (append C3 '.' FProp);
+                    if ([my Java_Fields] dexists AK)
+                    {
+                        if (([my Java_Fields] dget AK) sne Own_T)
+                        {
+                            [my Java_Fields] AK d= 'Object';
+                            [my Java_Fields] FK d= 'Object';
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    method string Java_Field_Type [string Cls, string Prop]
+    {
+        i Java_Build_Registry;
+        string C2 Cls;
+        integer Depth 0;
+        forever
+        {
+            if (Depth > 30)
+            {
+                break;
+            }
+            Depth = (Depth + 1);
+            string K (append C2 '.' Prop);
+            if ([my Java_Fields] dexists K)
+            {
+                return ([my Java_Fields] dget K);
+            }
+            if (not ([my Java_Class_Ancestors] dexists C2))
+            {
+                break;
+            }
+            C2 = ([my Java_Class_Ancestors] dget C2);
+        }
+        return '';
+    }
+
+    method string Java_Ctor_Arg_Type [object AC]
+    {
+        string T 'variant';
+        forgive
+        {
+            object DTE [AC.Data_Type];
+            if (DTE is an Element)
+            {
+                T = (DTE.Get_Input);
+            }
+            else
+            {
+                T = DTE;
+            }
+        }
+        string JT 'Object';
+        forgive
+        {
+            JT = (i Java_Type T);
+        }
+        forgive
+        {
+            if (not ([AC.Default_Value] is null))
+            {
+                JT = (i Java_Boxed_Type T);
+            }
+        }
+        if ((T s= 'variant') and (JT s= 'Object'))
+        {
+            forgive
+            {
+                string DT2 (i Java_Arg_Data_Type AC);
+                if ((DT2 s= 'list') or (DT2 s= 'dictionary'))
+                {
+                    JT = (i Java_Type DT2);
+                }
+            }
+        }
+        return JT;
+    }
+
+    method string Java_Inherited_Constructors [string CN]
+    {
+        comment `python subclasses inherit the parent constructor; java
+        inherits nothing, so a class without its own constructor gets
+        pass-through constructors matching the nearest ancestor
+        constructor, one per legal arity`;
+        i Java_Build_Registry;
+        string Cls (i Java_Owner_Class_Name);
+        return '' if (Cls seq '');
+        object Args [null];
+        string C2 Cls;
+        integer Depth 0;
+        forever
+        {
+            if (Depth > 30)
+            {
+                break;
+            }
+            Depth = (Depth + 1);
+            if (not ([my Java_Class_Ancestors] dexists C2))
+            {
+                break;
+            }
+            C2 = ([my Java_Class_Ancestors] dget C2);
+            if ([my Java_Ctor_Args] dexists C2)
+            {
+                Args = ([my Java_Ctor_Args] dget C2);
+                break;
+            }
+        }
+        return '' if (Args is null);
+        integer Total (llength Args);
+        integer Required 0;
+        integer Index 0;
+        object Arg;
+        for each Arg in Args
+        {
+            flag Has_Default [false];
+            forgive
+            {
+                object AC [Arg.Classification];
+                if (not ([AC.Default_Value] is null))
+                {
+                    Has_Default = [true];
+                }
+            }
+            if (not Has_Default)
+            {
+                Required = (Index + 1);
+            }
+            Index = (Index + 1);
+        }
+        string Out '';
+        integer Cut Required;
+        forever
+        {
+            if (Cut > Total)
+            {
+                break;
+            }
+            string Params '';
+            string Callargs '';
+            string Between '';
+            integer J 0;
+            object A2;
+            for each A2 in Args
+            {
+                if (J < Cut)
+                {
+                    object AC2 [A2.Classification];
+                    append Params Between (i Java_Ctor_Arg_Type AC2) ' ' (i Java_Param_Name A2);
+                    append Callargs Between (i Java_Param_Name A2);
+                    Between = ', ';
+                }
+                J = (J + 1);
+            }
+            append Out [line] CN '(' Params ') {' [line]
+                [indent] 'super(' Callargs ');' [line] '}';
+            Cut = (Cut + 1);
+        }
+        return Out;
+    }
+
+    method string Java_Method_Declared [string Cls, string M]
+    {
+        i Java_Build_Registry;
+        string C2 Cls;
+        integer Depth 0;
+        forever
+        {
+            if (Depth > 30)
+            {
+                break;
+            }
+            Depth = (Depth + 1);
+            if ([my Java_Methods] dexists (append C2 '.' M))
+            {
+                return 'y';
+            }
+            if (not ([my Java_Class_Ancestors] dexists C2))
+            {
+                break;
+            }
+            C2 = ([my Java_Class_Ancestors] dget C2);
+        }
+        return '';
+    }
+
+    method string Java_Direct_Args [string Cls, string M]
+    {
+        comment `arguments for a direct (non-reflective) self-call, each
+        cast to the declared parameter type of the resolved method; the
+        casts absorb the Object-typed probe variables java cannot verify`;
+        i Java_Build_Registry;
+        object Params [null];
+        string C2 Cls;
+        integer Depth 0;
+        forever
+        {
+            if (Depth > 30)
+            {
+                break;
+            }
+            Depth = (Depth + 1);
+            if ([my Java_Method_Args] dexists (append C2 '.' M))
+            {
+                Params = ([my Java_Method_Args] dget (append C2 '.' M));
+                break;
+            }
+            if (not ([my Java_Class_Ancestors] dexists C2))
+            {
+                break;
+            }
+            C2 = ([my Java_Class_Ancestors] dget C2);
+        }
+        string Code '';
+        string Between '';
+        integer Index 0;
+        integer PC 0;
+        forgive
+        {
+            PC = (llength Params);
+        }
+        object Arg;
+        for each Arg in [my Listargs]
+        {
+            string A [Arg.Java];
+            if (Index < PC)
+            {
+                object P2 (lget Params Index);
+                object PAC [P2.Classification];
+                string PT (i Java_Ctor_Arg_Type PAC);
+                A = (i Java_Cast_Code A PT);
+            }
+            append Code Between A;
+            Between = ', ';
+            Index = (Index + 1);
+        }
+        return Code;
+    }
+
+    method string Java_Return_Value [object VE]
+    {
+        comment `a returned value adapted to the effective return type of
+        the enclosing method: python-truthy literals for flag methods,
+        casts elsewhere; an empty result means the value drops (void)`;
+        string V [VE.Java];
+        string RT '';
+        forgive
+        {
+            object M (i Java_Owner_Method);
+            if (not (M is null))
+            {
+                RT = (M.Java_Effective_Return_Type);
+            }
+        }
+        return V if (RT seq '');
+        return '' if (RT s= 'void');
+        if (RT s= 'boolean')
+        {
+            return 'true' if (V s= '1');
+            return 'false' if (V s= '0');
+            i Java_Reflection_Runtime;
+            return (append 'galrt.truthy(' V ')');
+        }
+        if ((RT s= 'int') or (RT s= 'double'))
+        {
+            return '1' if (V s= 'true');
+            return '0' if (V s= 'false');
+        }
+        return (i Java_Cast VE RT);
+    }
+
+    method string Java_Loop_Var_Type [object E]
+    {
+        comment `a loop variable hoists with its inferred scalar type so
+        arithmetic and comparisons stay typed; anything else is Object`;
+        string JT 'Object';
+        forgive
+        {
+            string DT (i Java_Arg_Data_Type E);
+            if ((((DT s= 'integer') or (DT s= 'number')) or (DT s= 'flag')) or (DT s= 'string'))
+            {
+                JT = (i Java_Type DT);
+            }
+        }
+        return JT;
+    }
+
+    method string Java_Hoist
+    {
+        comment `the hoisted local declarations of a function body, from
+        the registry the declaration statements filled`;
+        string Hoist '';
+        forgive
+        {
+            iterate [my Java_Locals] DN DT
+            {
+                if (DT sne '@param')
+                {
+                    append Hoist DT ' ' DN ' = ' (i Java_Default DT) ';' [line];
+                }
+            }
+        }
+        return Hoist;
+    }
+
+    method string Java_Cond [object Op]
+    {
+        comment `a condition with python truthiness: reflected values,
+        strings and numbers go through Gal.truthy; typed flags pass
+        through as booleans`;
+        string Code [Op.Java];
+        string T (i Java_Arg_Data_Type Op);
+        forgive
+        {
+            object M5 (i Java_Owner_Method);
+            if ([M5.Java_Locals] dexists Code)
+            {
+                if (([M5.Java_Locals] dget Code) s= 'Object')
+                {
+                    T = '';
+                }
+            }
+        }
+        if (T s= 'flag')
+        {
+            return Code;
+        }
+        if (i Java_Reflected Code)
+        {
+            i Java_Reflection_Runtime;
+            return (append 'galrt.truthy(' Code ')');
+        }
+        if ((T s= 'integer') or (T s= 'number'))
+        {
+            return (append '(' Code ' != 0)');
+        }
+        if (T s= 'string')
+        {
+            i Java_Reflection_Runtime;
+            return (append 'galrt.truthy(' Code ')');
+        }
+        comment `unknown types also go through truthy: a boolean java
+        expression boxes and passes, and python truthiness holds for the
+        rest`;
+        i Java_Reflection_Runtime;
+        return (append 'galrt.truthy(' Code ')');
+    }
+
+    method string Java_Assign [object Target, string Value_Code]
+    {
+        comment `an assignment whose target may be a reflective property
+        chain: those set through Gal.set (the chain generator left the
+        object part and final name behind); plain variables assign
+        directly, coerced to the target's inferred type`;
+        string TC [Target.Java];
+        if (i Java_Reflected TC)
+        {
+            object C [Target.Classification];
+            return (append 'galrt.set(' [C.Java_Set_Object] ', "' [C.Java_Set_Name] '", ' Value_Code ');');
+        }
+        string JT '';
+        forgive
+        {
+            string DT (i Java_Arg_Data_Type Target);
+            if (DT sgt '')
+            {
+                JT = (i Java_Type DT);
+            }
+        }
+        if (JT sgt '')
+        {
+            Value_Code = (i Java_Coerce Value_Code JT);
+        }
+        return (append TC ' = ' Value_Code ';');
+    }
+
+    method flag Java_Declare [string Name, string JT]
+    {
+        comment `java scopes block-locally where python scopes
+        function-locally, so method locals hoist: this registers the local
+        (first type wins) on the enclosing function, whose generator emits
+        the declarations at the top; declaration statements then emit
+        plain assignments. returns false at class or module level, where
+        the declaration must stay inline`;
+        if ((Name contains '.') or (Name contains '('))
+        {
+            comment `not a simple local (a static property chain or an
+            expression target): plain assignment, nothing to declare`;
+            return [true];
+        }
+        object M (i Java_Owner_Method);
+        if (M is null)
+        {
+            return [false];
+        }
+        if (not ([M.Java_Locals] dexists Name))
+        {
+            [M.Java_Locals] Name d= JT;
+        }
+        else
+        {
+            if (([M.Java_Locals] dget Name) seq '')
+            {
+                [M.Java_Locals] Name d= JT;
+            }
+        }
+        return [true];
+    }
+
+    method string Java_Owner_Class_Name
+    {
+        string Cls '';
+        forgive
+        {
+            object OC (i Get_Owner_Class);
+            object CNE [OC.Class_Name];
+            Cls = (CNE.Get_Input);
+        }
+        return Cls;
+    }
+
+    method object Java_Owner_Method
+    {
+        if ([my Classification] is a Function_Statement)
+        {
+            return [my Classification];
+        }
+        if ([my Classification] is a Statement_Constructor)
+        {
+            return [my Classification];
+        }
+        if ([my Classification] is a Statement_Main)
+        {
+            return [my Classification];
+        }
+        forgive
+        {
+            return ([my Parent].Java_Owner_Method);
+        }
+        return [null];
+    }
+
+    method string Java_Effective_Return_Type
+    {
+        comment `java overrides must repeat the ancestor's return type
+        exactly, so a method's effective type is the topmost same-named
+        declaration in its ancestor chain`;
+        string RT (i Java_Method_Return_Type);
+        forgive
+        {
+            object MNE [my Name];
+            string M (MNE.Get_Input);
+            string Cls (i Java_Owner_Class_Name);
+            if (Cls sgt '')
+            {
+                i Java_Build_Registry;
+                string C2 Cls;
+                integer Depth 0;
+                forever
+                {
+                    if (Depth > 30)
+                    {
+                        break;
+                    }
+                    Depth = (Depth + 1);
+                    if (not ([my Java_Class_Ancestors] dexists C2))
+                    {
+                        break;
+                    }
+                    C2 = ([my Java_Class_Ancestors] dget C2);
+                    if ([my Java_Methods] dexists (append C2 '.' M))
+                    {
+                        RT = ([my Java_Methods] dget (append C2 '.' M));
+                    }
+                }
+            }
+        }
+        return RT;
+    }
+
+    method string Java_Method_Return_Type
+    {
+        comment `reads the declared type from source text, not from the
+        generated Java: the registry runs before most elements have
+        generated`;
+        string RT 'void';
+        forgive
+        {
+            object DTE [my Data_Type];
+            string T2 '';
+            if (DTE is an Element)
+            {
+                T2 = (DTE.Get_Input);
+            }
+            else
+            {
+                T2 = DTE;
+            }
+            if ((T2 sgt '') and (T2 sne 'void'))
+            {
+                RT = (i Java_Type T2);
+            }
+        }
+        return RT;
+    }
+
+    method void Java_Reflection_Runtime
+    {
+        comment `the reflective access layer: get/set/call resolve members
+        at run time with python attribute semantics. a missing member
+        raises Undefined (the AttributeError analogue), and setting an
+        undeclared attribute lands in the _attrs map every root class
+        inherits from GalBase`;
+        i Java_Helper 'static class Undefined extends RuntimeException {}';
+        i Java_Helper (append 'static class GalBase {' [line]
+            [indent] 'java.util.HashMap<String, Object> _attrs;' [line] '}');
+        i Java_Helper (append 'static java.lang.reflect.Field find_field(Object o, String name) {' [line]
+            [indent] 'for (Class<?> c = o.getClass(); c != null; c = c.getSuperclass()) {' [line]
+            [indent] [indent] 'try { var f = c.getDeclaredField(name); f.setAccessible(true); return f; }' [line]
+            [indent] [indent] 'catch (NoSuchFieldException e) {}' [line]
+            [indent] '}' [line]
+            [indent] 'return null;' [line] '}');
+        i Java_Helper (append 'static Object get(Object o, String name) {' [line]
+            [indent] 'if (o == null) throw new Undefined();' [line]
+            [indent] 'var f = find_field(o, name);' [line]
+            [indent] 'if (f != null) { try { return f.get(o); } catch (Exception e) { throw new RuntimeException(e); } }' [line]
+            [indent] 'if (o instanceof GalBase b && b._attrs != null && b._attrs.containsKey(name)) return b._attrs.get(name);' [line]
+            [indent] 'throw new Undefined();' [line] '}');
+        i Java_Helper (append 'static void set(Object o, String name, Object v) {' [line]
+            [indent] 'if (o == null) throw new Undefined();' [line]
+            [indent] 'var f = find_field(o, name);' [line]
+            [indent] 'if (f != null) { try { f.set(o, v); return; } catch (Exception e) { throw new RuntimeException(e); } }' [line]
+            [indent] 'var b = (GalBase) o;' [line]
+            [indent] 'if (b._attrs == null) b._attrs = new java.util.HashMap<>();' [line]
+            [indent] 'b._attrs.put(name, v);' [line] '}');
+        i Java_Helper (append 'static Object call_static(Class<?> c, String name, Object... args) {' [line]
+            [indent] 'for (Class<?> k = c; k != null; k = k.getSuperclass()) {' [line]
+            [indent] [indent] 'for (var m : k.getDeclaredMethods()) {' [line]
+            [indent] [indent] [indent] 'if (m.getName().equals(name) && m.getParameterCount() == args.length) {' [line]
+            [indent] [indent] [indent] [indent] 'm.setAccessible(true);' [line]
+            [indent] [indent] [indent] [indent] 'try { return m.invoke(null, args); }' [line]
+            [indent] [indent] [indent] [indent] 'catch (java.lang.reflect.InvocationTargetException e) {' [line]
+            [indent] [indent] [indent] [indent] [indent] 'if (e.getCause() instanceof RuntimeException re) throw re;' [line]
+            [indent] [indent] [indent] [indent] [indent] 'throw new RuntimeException(e.getCause());' [line]
+            [indent] [indent] [indent] [indent] '}' [line]
+            [indent] [indent] [indent] [indent] 'catch (Exception e) { throw new RuntimeException(e); }' [line]
+            [indent] [indent] [indent] '}' [line]
+            [indent] [indent] '}' [line]
+            [indent] '}' [line]
+            [indent] 'throw new Undefined();' [line] '}');
+        i Java_Helper (append 'static boolean truthy(Object x) {' [line]
+            [indent] 'if (x == null) return false;' [line]
+            [indent] 'if (x instanceof Boolean b) return b;' [line]
+            [indent] 'if (x instanceof Integer i) return i != 0;' [line]
+            [indent] 'if (x instanceof Double d) return d != 0;' [line]
+            [indent] 'if (x instanceof String s) return !s.isEmpty();' [line]
+            [indent] 'if (x instanceof java.util.List<?> l) return !l.isEmpty();' [line]
+            [indent] 'if (x instanceof java.util.Map<?,?> m) return !m.isEmpty();' [line]
+            [indent] 'return true;' [line] '}');
+        i Java_Helper (append 'static Object call(Object o, String name, Object... args) {' [line]
+            [indent] 'if (o == null) throw new Undefined();' [line]
+            [indent] 'for (Class<?> c = o.getClass(); c != null; c = c.getSuperclass()) {' [line]
+            [indent] [indent] 'for (var m : c.getDeclaredMethods()) {' [line]
+            [indent] [indent] [indent] 'if (m.getName().equals(name) && m.getParameterCount() == args.length) {' [line]
+            [indent] [indent] [indent] [indent] 'm.setAccessible(true);' [line]
+            [indent] [indent] [indent] [indent] 'try { return m.invoke(o, args); }' [line]
+            [indent] [indent] [indent] [indent] 'catch (java.lang.reflect.InvocationTargetException e) {' [line]
+            [indent] [indent] [indent] [indent] [indent] 'if (e.getCause() instanceof RuntimeException re) throw re;' [line]
+            [indent] [indent] [indent] [indent] [indent] 'throw new RuntimeException(e.getCause());' [line]
+            [indent] [indent] [indent] [indent] '}' [line]
+            [indent] [indent] [indent] [indent] 'catch (Exception e) { throw new RuntimeException(e); }' [line]
+            [indent] [indent] [indent] '}' [line]
+            [indent] [indent] '}' [line]
+            [indent] '}' [line]
+            [indent] 'throw new Undefined();' [line] '}');
+    }
+
+    method string Java_Param_Decl [object Arg]
+    {
+        comment `an untyped gal parameter arrives as a plain name token;
+        it declares as Object, unless inference knows it carries a list or
+        dictionary, which then declares typed so collection operations
+        dispatch statically`;
+        string Code [Arg.Java];
+        if (not (Code contains ' '))
+        {
+            string JT 'Object';
+            forgive
+            {
+                string DT (i Java_Arg_Data_Type Arg);
+                if ((DT s= 'list') or (DT s= 'dictionary'))
+                {
+                    JT = (i Java_Type DT);
+                }
+            }
+            Code = (append JT ' ' Code);
+        }
+        return Code;
+    }
+
+    method string Java_Param_Name [object Arg]
+    {
+        string Name '';
+        forgive
+        {
+            object AC [Arg.Classification];
+            object VE [AC.Variable];
+            Name = (VE.Get_Input);
+        }
+        if (Name seq '')
+        {
+            Name = [Arg.Java];
+        }
+        return Name;
+    }
+
+    method string Java_Params
+    {
+        comment `a method or constructor parameter list: the bracket
+        parameters live in Listargs, each already generated as
+        type-space-name, or as a bare name when the gal source leaves the
+        parameter untyped`;
+        object Arg;
+        string Code '';
+        string Between '';
+        for each Arg in [my Listargs]
+        {
+            append Code Between (i Java_Param_Decl Arg);
+            = Between ', ';
+        }
+        return Code;
+    }
+
+    method string Java_String
+    {
+        comment `an expression coerced to string for .equals comparisons:
+        quoted literals pass through, everything else goes through valueOf
+        (the inferred data type cannot be trusted here: probe variables
+        declare as Object). fully qualified, because gal sources may
+        declare their own String class`;
+        string Code [my Java];
+        forgive
+        {
+            return Code if ([my Classification] is a Token_Quote);
+        }
+        return (append 'java.lang.String.valueOf(' Code ')');
+    }
+
+    method string Java_Append [list Args]
+    {
+        comment `the shared + concatenation builder behind say, append and
+        error: runs of literal arguments merge into one quoted string, and
+        when the first piece is not string-typed a leading "" forces java
+        to concatenate instead of adding`;
+        string Code '';
+        string Between '';
+        string Plain '';
+        flag Have_Plain [false];
+        flag First_Is_String [false];
+        flag First [true];
+        integer Pieces 0;
+        object Arg;
+        for each Arg in Args
+        {
+            object AC [Arg.Classification];
+            string U '<none>';
+            object U3 [null];
+            forgive
+            {
+                U3 = [AC.Unquoted];
+            }
+            comment `probed through an object variable: a string
+            declaration would coerce None to the text 'None' under the
+            python host. a null Unquoted (the repeat-count literals clear
+            it deliberately) is not mergeable text - the piece must embed
+            as an expression`;
+            if (not (U3 is an Element))
+            {
+                if (not (U3 is null))
+                {
+                    U = U3;
+                }
+            }
+            if (U sne '<none>')
+            {
+                if First
+                {
+                    First_Is_String = [true];
+                    First = [false];
+                }
+                append Plain U;
+                Have_Plain = [true];
+            }
+            else
+            {
+                if First
+                {
+                    comment `only a quoted literal is certainly a java
+                    String; inferred-string expressions may be Object
+                    (probe variables), and a leading "" is always safe`;
+                    forgive
+                    {
+                        if ([Arg.Classification] is a Token_Quote)
+                        {
+                            First_Is_String = [true];
+                        }
+                    }
+                    First = [false];
+                }
+                if Have_Plain
+                {
+                    append Code Between (i Java_Quote Plain);
+                    Between = ' + ';
+                    Plain = '';
+                    Have_Plain = [false];
+                    Pieces = (Pieces + 1);
+                }
+                append Code Between [Arg.Java];
+                Between = ' + ';
+                Pieces = (Pieces + 1);
+            }
+        }
+        if Have_Plain
+        {
+            append Code Between (i Java_Quote Plain);
+            Pieces = (Pieces + 1);
+        }
+        if ((Pieces > 1) and (not First_Is_String))
+        {
+            Code = (append '"" + ' Code);
+        }
+        return Code;
+    }
+}
+
+class set Statement
+{
+    method string Java_Block
+    {
+        forgive
+        {
+            if (not ([my Block Java] is null))
+            {
+                return [my Block Java];
+            }
+        }
+        return (append ' {' [line] '}');
+    }
+}
+
+class set Operation
+{
+    method string Java_Numeric_Operand [object Op]
+    {
+        comment `java must convert a string-typed operand explicitly, and
+        the parse methods are plain expressions, so the conversion inlines:
+        Integer.parseInt when the surrounding usage is integer,
+        Double.parseDouble otherwise`;
+        string Code [Op.Java];
+        if ((i Java_Arg_Data_Type Op) s= 'string')
+        {
+            if ([my Usage] s= 'integer')
+            {
+                Code = (append 'Integer.parseInt(' Code '.trim())');
+            }
+            else
+            {
+                Code = (append 'Double.parseDouble(' Code '.trim())');
+            }
+        }
+        else
+        {
+            string T2 (i Java_Arg_Data_Type Op);
+            forgive
+            {
+                comment `a local widened to Object by a conflicting
+                redeclaration must convert regardless of the inference`;
+                object M4 (i Java_Owner_Method);
+                if ([M4.Java_Locals] dexists Code)
+                {
+                    if (([M4.Java_Locals] dget Code) s= 'Object')
+                    {
+                        T2 = '';
+                    }
+                }
+            }
+            if ((T2 sne 'integer') and (T2 sne 'number'))
+            {
+                comment `unknown or Object-typed operands cast through
+                Number; the cast is legal (boxing) even on typed values`;
+                if ([my Usage] s= 'integer')
+                {
+                    Code = (i Java_Cast_Code Code 'int');
+                }
+                else
+                {
+                    Code = (i Java_Cast_Code Code 'double');
+                }
+            }
+        }
+        return Code;
+    }
+
+    method string Java_Numeric_Infix [object Op1, object Op2, string Infix]
+    {
+        comment `strictly two operands, like the python and js backends:
+        chains parse nested (Op2 is the rest), and the flat Arguments list
+        may carry a repeated operator keyword that is not an operand`;
+        return (append '(' (i Java_Numeric_Operand Op1) Infix (i Java_Numeric_Operand Op2) ')');
+    }
+
+    method string Java_Infix [object Op1, object Op2, string Infix]
+    {
+        return (append '(' [Op1.Java] Infix [Op2.Java] ')');
+    }
+}
+
+generator Java Fallback
+{
+    english 'generate java code for each language element, using the inferred data types.';
+
+    generate Element
+    {
+        i = '';
+    }
+
+    generate Statement
+    {
+        error 'no java generator for statement ' [class name];
+    }
+
+    generate Operation
+    {
+        error 'no java generator for operation ' [class name];
+    }
+
+    generate Token
+    {
+        i = [my Text];
+    }
+
+    generate Token_Quote
+    {
+        i = (i Java_Quote [my Unquoted]);
+    }
+
+    generate Syntax_True
+    {
+        i = 'true';
+    }
+
+    generate Syntax_False
+    {
+        i = 'false';
+    }
+
+    generate Syntax_Line
+    {
+        comment `the java expression for an embedded [line], plus the side
+        effect every target's literal generator supplies: Unquoted holds
+        the real character for the concat and comment builders. a repeat
+        count compiles to String.repeat and clears Unquoted so the literal
+        is not merged as plain text`;
+        my Unquoted = [line];
+        string Code '"\n"';
+        defined [my Count]
+        {
+            Code = (append '"\n".repeat(' [my Count Java] ')');
+            my Unquoted = [null];
+        }
+        i = Code;
+    }
+
+    generate Syntax_Tab
+    {
+        my Unquoted = [tab];
+        string Code '"\t"';
+        defined [my Count]
+        {
+            Code = (append '"\t".repeat(' [my Count Java] ')');
+            my Unquoted = [null];
+        }
+        i = Code;
+    }
+
+    generate Syntax_Indent
+    {
+        my Unquoted = '    ';
+        string Code '"    "';
+        defined [my Count]
+        {
+            Code = (append '"    ".repeat(' [my Count Java] ')');
+            my Unquoted = [null];
+        }
+        i = Code;
+    }
+
+    generate Program
+    {
+        comment `java dictates little about file order, but the imports
+        must come first. the statements generate before the header is
+        assembled, so the import and helper registries are complete. the
+        helper Gal class, when any helper registered, comes last`;
+        string Body '';
+        string Between '';
+        object Stmt;
+        for each Stmt in [my Statements]
+        {
+            undefined [Stmt.Java]
+            {
+                Stmt.Infer_Java;
+            }
+            string S [Stmt.Java];
+            if (S sgt '')
+            {
+                append Body Between S [line];
+                Between = [line];
+            }
+        }
+        string Code '';
+        string Imp;
+        for each Imp in [my Java_Imports]
+        {
+            append Code 'import ' Imp ';' [line];
+        }
+        if ((llength [my Java_Imports]) > 0)
+        {
+            append Code [line];
+        }
+        append Code Body;
+        if ((llength [my Java_Helpers]) > 0)
+        {
+            append Code [line] '@SuppressWarnings({"unchecked", "cast", "serial", "rawtypes", "this-escape", "deprecation", "removal"})' [line] 'class galrt {' [line];
+            string H;
+            for each H in [my Java_Helpers]
+            {
+                append Code (i Indent (append H [line]));
+            }
+            append Code '}' [line];
+        }
+        i = Code;
+    }
+
+    generate Block
+    {
+        comment `an else or else if statement merges onto the closing
+        brace of the statement before it, the java brace style`;
+        list Parts;
+        object Line;
+        for each Line in [my Statements]
+        {
+            string S [Line.Java];
+            continue if (S seq '');
+            flag Merge_Up [false];
+            if (((length S) >= 4) and ((substring S 0 4) s= 'else'))
+            {
+                Merge_Up = [true];
+            }
+            if (((length S) >= 5) and ((substring S 0 5) s= 'catch'))
+            {
+                Merge_Up = [true];
+            }
+            if (Merge_Up and ((llength Parts) > 0))
+            {
+                string Prev (pop Parts);
+                push Parts (append Prev ' ' S);
+            }
+            else
+            {
+                push Parts S;
+            }
+        }
+        string Statements '';
+        string P;
+        for each P in Parts
+        {
+            append Statements P [line];
+        }
+        my Java_Statements = Statements;
+        string Code (append ' {' [line] (i Indent Statements) '}');
+        i = Code;
+    }
+
+    generate Statement_Flowerbox
+    {
+        i = '';
+    }
+
+    generate Statement_Comment
+    {
+        string Text '';
+        object Argument;
+        for each Argument in [my Arguments]
+        {
+            if (Argument is a Token_Quote)
+            {
+                append Text [Argument.Unquoted];
+            }
+            else
+            {
+                string Piece (Argument.Get_Input);
+                forgive
+                {
+                    comment `a bracketed literal like [line] carries its real
+                    character in the classification's Unquoted property`;
+                    object AC [Argument.Classification];
+                    if ((AC is a Literal_Syntax) and (defined [AC.Unquoted]))
+                    {
+                        Piece = [AC.Unquoted];
+                    }
+                }
+                append Text Piece;
+            }
+        }
+        # 'quote openers would poison Element.Indent quote tracking downstream, replace with closing homoglyphs';
+        replace Text "'" '’';
+        replace Text '"' '”';
+        replace Text '`' '’';
+        replace Text '“' '”';
+        replace Text '‘' '’';
+        replace Text '«' '»';
+        replace Text '‹' '›';
+        string Code '';
+        lsplit Lines Text [line];
+        for each Text in Lines
+        {
+            if (Code sgt '')
+            {
+                append Code [line];
+            }
+            append Code '// ' Text;
+        }
+        i = Code;
+    }
+
+    generate Statement_Module
+    {
+        comment `the module is the public class: java requires the file to
+        be named after it, which the oracle and the article both honor`;
+        string Body '';
+        object Stmt;
+        for each Stmt in [my Block Statements]
+        {
+            string S [Stmt.Java];
+            if (S sgt '')
+            {
+                append Body S [line];
+            }
+        }
+        string MN [my Name Java];
+        flag Clash [false];
+        forgive
+        {
+            object S2;
+            object C2;
+            for each S2 in [my Block Statements]
+            {
+                C2 = [S2.Classification];
+                if (C2 is a Statement_Class)
+                {
+                    object CNE [C2.Class_Name];
+                    if ((CNE.Get_Input) s= MN)
+                    {
+                        Clash = [true];
+                    }
+                }
+            }
+        }
+        if Clash
+        {
+            comment `a gal class may not share the enclosing public class's
+            simple name, so the module class steps aside`;
+            MN = (append MN '_Program');
+        }
+        string Code '@SuppressWarnings({"unchecked", "cast", "serial", "rawtypes", "this-escape", "deprecation", "removal"})' [line]
+            'public class ' MN ' {' [line]
+            (i Indent Body)
+            '}';
+        i = Code;
+    }
+
+    generate Statement_Main
+    {
+        comment `a main with parameters wraps the real body in Gal_Main and
+        forwards the command-line arguments positionally`;
+        if ((llength [my Listargs]) = 0)
+        {
+            string Inner '';
+            forgive
+            {
+                Inner = [my Block Java_Statements];
+            }
+            i = (append 'public static void main(String[] args) {' [line] (i Indent (append (i Java_Hoist) Inner)) '}');
+        }
+        else
+        {
+            string Callargs '';
+            string Between '';
+            integer Index 0;
+            object Arg;
+            for each Arg in [my Listargs]
+            {
+                append Callargs Between 'args[' (string Index) ']';
+                Between = ', ';
+                Index = (Index + 1);
+            }
+            string Inner '';
+            forgive
+            {
+                Inner = [my Block Java_Statements];
+            }
+            string Code 'public static void main(String[] args) {' [line]
+                [indent] 'Gal_Main(' Callargs ');' [line]
+                '}' [line]
+                'static void Gal_Main(' (i Java_Params) ') {' [line]
+                (i Indent (append (i Java_Hoist) Inner)) '}';
+            i = Code;
+        }
+    }
+
+    generate Statement_Integer
+    {
+        string Value '0';
+        forgive
+        {
+            if (not ([my Value] is null))
+            {
+                Value = (i Java_Cast [my Value] 'int');
+            }
+        }
+        string Name [my Name Java];
+        string Decl 'int ';
+        if (i Java_Declare Name 'int')
+        {
+            Decl = '';
+        }
+        i = (append Decl Name ' = ' Value ';');
+    }
+
+    generate Statement_Number
+    {
+        string Value '0.0';
+        forgive
+        {
+            if (not ([my Value] is null))
+            {
+                Value = (i Java_Cast [my Value] 'double');
+            }
+        }
+        string Name [my Name Java];
+        string Decl 'double ';
+        if (i Java_Declare Name 'double')
+        {
+            Decl = '';
+        }
+        i = (append Decl Name ' = ' Value ';');
+    }
+
+    generate Statement_Flag
+    {
+        string Value 'false';
+        forgive
+        {
+            if (not ([my Value] is null))
+            {
+                Value = (i Java_Cast [my Value] 'boolean');
+            }
+        }
+        string Name [my Name Java];
+        string Decl 'boolean ';
+        if (i Java_Declare Name 'boolean')
+        {
+            Decl = '';
+        }
+        i = (append Decl Name ' = ' Value ';');
+    }
+
+    generate Statement_String
+    {
+        comment `multiple value arguments concatenate, mirroring the
+        python backend. a single value that is not statically string-typed
+        keeps the java variable Object: the sources use string
+        declarations as probes that may really hold elements (the
+        Data_Type idiom), and an instanceof guard must still work`;
+        string Value '""';
+        string Decl 'String ';
+        forgive
+        {
+            if ((llength [my Listargs]) > 1)
+            {
+                Value = (i Java_Append [my Listargs]);
+            }
+            else if ((llength [my Listargs]) > 0)
+            {
+                object V (lget [my Listargs] 0);
+                string VT (i Java_Arg_Data_Type V);
+                Value = [V.Java];
+                if ((VT sne 'string') or (i Java_Reflected Value))
+                {
+                    comment `a reflective get is Object no matter what the
+                    inference claims: the Data_Type probe idiom stores
+                    elements in string-declared properties`;
+                    Decl = 'Object ';
+                }
+                else
+                {
+                    Value = (i Java_Cast_Code Value 'String');
+                }
+            }
+        }
+        string Name [my Name Java];
+        string JT 'String';
+        if (Decl s= 'Object ')
+        {
+            JT = 'Object';
+        }
+        if (i Java_Declare Name JT)
+        {
+            Decl = '';
+        }
+        i = (append Decl Name ' = ' Value ';');
+    }
+
+    generate Statement_Object
+    {
+        comment `an object declaration types itself from a new expression
+        when one is present; anything else (method results, property
+        fetches, no value) declares java.lang.Object and member access
+        casts later`;
+        string Value 'null';
+        string Type 'Object';
+        flag Has_Value [false];
+        forgive
+        {
+            if (not ([my Value] is null))
+            {
+                Has_Value = [true];
+            }
+        }
+        if Has_Value
+        {
+            Value = [my Value Java];
+            object V [my Value];
+            object VC [V.Classification];
+            forgive
+            {
+                if (VC is an Operation_New)
+                {
+                    Type = [VC.Class_Name Java];
+                }
+            }
+            if ((Type contains '.') or (Type contains '('))
+            {
+                Type = 'Object';
+            }
+            if (Type s= 'Object')
+            {
+                comment `the declaration keyword said object, but when
+                inference knows the value is really a list or dictionary
+                the java variable declares that way, so collection
+                operations dispatch statically`;
+                forgive
+                {
+                    string DT (i Java_Arg_Data_Type [my Value]);
+                    if ((DT s= 'list') or (DT s= 'dictionary'))
+                    {
+                        Type = (i Java_Type DT);
+                        Value = (i Java_Cast [my Value] Type);
+                    }
+                }
+            }
+        }
+        string Name [my Name Java];
+        string Decl (append Type ' ');
+        if (i Java_Declare Name Type)
+        {
+            Decl = '';
+        }
+        i = (append Decl Name ' = ' Value ';');
+    }
+
+    generate Statement_List
+    {
+        comment `lists are mutable ArrayLists; a literal initializer keeps
+        its inferred element type, anything else is a List of Object`;
+        i Java_Import 'java.util.List';
+        i Java_Import 'java.util.ArrayList';
+        string Name [my Name Java];
+        if ((llength [my Listargs]) = 0)
+        {
+            string Decl 'List<Object> ';
+            if (i Java_Declare Name 'List<Object>')
+            {
+                Decl = '';
+            }
+            i = (append Decl Name ' = new ArrayList<>();');
+        }
+        else
+        {
+            string ET 'Object';
+            forgive
+            {
+                ET = (i Java_Value_Type (lget [my Listargs] 0));
+            }
+            string LT (append 'List<' ET '>');
+            string Decl (append LT ' ');
+            if (i Java_Declare Name LT)
+            {
+                Decl = '';
+            }
+            i = (append Decl Name ' = new ArrayList<>(List.of(' (i Java_Args ', ') '));');
+        }
+    }
+
+    generate Statement_Dictionary
+    {
+        comment `java needs the map's value type at the declaration; gal's
+        inference stops at 'dictionary', so the declaration reads it from
+        the first sibling dictionary assignment it can see`;
+        i Java_Import 'java.util.HashMap';
+        i Java_Import 'java.util.LinkedHashMap';
+        string My_Name [my Name Java];
+        string VT '';
+        forgive
+        {
+            comment `Parent is the enclosing scoped statement, and its Block
+            holds the sibling statements`;
+            object P [my Parent];
+            object S;
+            for each S in [P.Block Statements]
+            {
+                continue if (VT sgt '');
+                forgive
+                {
+                    object C [S.Classification];
+                    if (C is a Statement_Dictionary_Assign)
+                    {
+                        object D [C.Dict];
+                        if ((D.Get_Input) s= My_Name)
+                        {
+                            VT = (i Java_Value_Type [C.Value]);
+                        }
+                    }
+                }
+            }
+        }
+        if (VT seq '')
+        {
+            VT = 'Object';
+        }
+        string DT2 (append 'HashMap<String, ' VT '>');
+        string Decl (append DT2 ' ');
+        if (i Java_Declare My_Name DT2)
+        {
+            Decl = '';
+        }
+        i = (append Decl My_Name ' = new LinkedHashMap<>();');
+    }
+
+    generate Statement_Dictionary_Assign
+        (i Java_Dict_Of [my Dict]) '.put(' (i Java_Cast [my Subscript] 'String') ', ' Value ');';
+
+    generate Operation_Dict_Get
+        (i Java_Dict_Of [my Dictionary]) '.get(' (i Java_Cast [my Key] 'String') ')';
+
+    generate Statement_Assign
+    {
+        string VC [my Value Java];
+        string JT '';
+        forgive
+        {
+            comment `a typed property destination knows its real java
+            field type; that beats the inference, which cannot see the
+            probe idiom`;
+            object DE2 [my Destination];
+            object DC2 [DE2.Classification];
+            string ST [DC2.Java_Static_Type];
+            if (ST sgt '')
+            {
+                JT = ST;
+            }
+        }
+        if (JT seq '')
+        {
+            comment `a hoisted local knows its declared java type`;
+            forgive
+            {
+                object M3 (i Java_Owner_Method);
+                string TC0 [my Destination Java];
+                if ([M3.Java_Locals] dexists TC0)
+                {
+                    JT = ([M3.Java_Locals] dget TC0);
+                }
+                if (JT s= '@param')
+                {
+                    JT = '';
+                }
+            }
+        }
+        if (JT seq '')
+        {
+            forgive
+            {
+                string DT (i Java_Arg_Data_Type [my Destination]);
+                if (DT sgt '')
+                {
+                    JT = (i Java_Type DT);
+                }
+            }
+        }
+        if (JT sgt '')
+        {
+            VC = (i Java_Cast [my Value] JT);
+        }
+        string TC [my Destination Java];
+        if (i Java_Reflected TC)
+        {
+            object DE [my Destination];
+            object C [DE.Classification];
+            i = (append 'galrt.set(' [C.Java_Set_Object] ', "' [C.Java_Set_Name] '", ' [my Value Java] ');');
+        }
+        else
+        {
+            i = (append TC ' = ' VC ';');
+        }
+    }
+
+    generate Statement_Say
+    {
+        comment `say builds a + concatenation through the shared Java_Append
+        builder: runs of literal arguments merge into one quoted string, and
+        when the first piece is not string-typed a leading "" forces java
+        to concatenate instead of adding`;
+        i = (append 'System.out.println(' (i Java_Append [my Arguments]) ');');
+    }
+
+    generate Statement_Append
+    {
+        string TC [my Variable Java];
+        string Concat (i Java_Append [my Listargs]);
+        if (i Java_Reflected TC)
+        {
+            object V [my Variable];
+            object C [V.Classification];
+            i = (append 'galrt.set(' [C.Java_Set_Object] ', "' [C.Java_Set_Name] '", ' (i Java_Cast_Code TC 'String') ' + ' Concat ');');
+        }
+        else
+        {
+            comment `the target may be an Object-declared probe variable,
+            so the concatenation casts it; for a real String the cast is
+            redundant and legal`;
+            i = (append TC ' = ' (i Java_Cast_Code TC 'String') ' + ' Concat ';');
+        }
+    }
+
+    generate Statement_Readline
+    {
+        comment `string literals are prompts, names are input variables:
+        each name reads one line, carrying the prompt gathered since the
+        last read. the read itself is a shared Scanner in the Gal helper
+        class, so any class in the file can reach it`;
+        i Java_Import 'java.util.Scanner';
+        string H 'static Scanner stdin = new Scanner(System.in);' [line] [line]
+            'static String readline() {' [line]
+            [indent] 'return stdin.nextLine();' [line]
+            '}';
+        i Java_Helper H;
+        string Code '';
+        string Between '';
+        string Prompt '';
+        objects Arg Argc;
+        for each Arg in [my Arguments]
+        {
+            Argc = [Arg.Classification];
+            if (Argc is a Token_Quote)
+            {
+                if (Prompt sgt '')
+                {
+                    append Prompt ' + ';
+                }
+                append Prompt [Arg.Java];
+            }
+            else
+            {
+                if (Prompt sgt '')
+                {
+                    append Code Between 'System.out.print(' Prompt ');';
+                    Between = [line];
+                    Prompt = '';
+                }
+                append Code Between [Arg.Java] ' = galrt.readline();';
+                Between = [line];
+            }
+        }
+        i = Code;
+    }
+
+    generate Statement_If
+        'if (' (i Java_Cond [my Condition]) ')' (i Java_Block);
+
+    generate Statement_Else_If
+        'else if (' (i Java_Cond [my Condition]) ')' (i Java_Block);
+
+    generate Statement_Else
+        'else' (i Java_Block);
+
+    generate Statement_For_Range
+    {
+        string V [my Variable Java];
+        string Decl 'int ';
+        forgive
+        {
+            object M (i Java_Owner_Method);
+            if ([M.Java_Locals] dexists V)
+            {
+                Decl = '';
+            }
+        }
+        string Cmp ' <= ';
+        forgive
+        {
+            comment `a negative literal increment counts down, so the
+            continuation test flips (python range semantics)`;
+            string IC [my Increment Java];
+            if ((substring IC 0 1) s= '-')
+            {
+                Cmp = ' >= ';
+            }
+        }
+        string Code 'for (' Decl V ' = ' [my Start Java] '; ' V Cmp [my End Java] '; ';
+        if (defined [my Increment])
+        {
+            append Code V ' += ' [my Increment Java];
+        }
+        else
+        {
+            append Code V '++';
+        }
+        append Code ')' (i Java_Block);
+        i = Code;
+    }
+
+    generate Statement_For_Each
+    {
+        comment `gal sources usually declare the loop variable beforehand
+        (python function scoping); if it is a registered method local the
+        java loop iterates a fresh name and assigns, else it declares the
+        loop variable itself`;
+        string Item [my Item Java];
+        string L (i Java_Each_Of [my List]);
+        flag Declared [false];
+        forgive
+        {
+            object M (i Java_Owner_Method);
+            if ([M.Java_Locals] dexists Item)
+            {
+                Declared = [true];
+            }
+        }
+        if Declared
+        {
+            string Block '';
+            forgive
+            {
+                Block = [my Block Java_Statements];
+            }
+            string Item_V (append Item '_Each');
+            forgive
+            {
+                string IJT (i Java_Loop_Var_Type [my Item]);
+                if (IJT sne 'Object')
+                {
+                    Item_V = (i Java_Cast_Code Item_V IJT);
+                }
+            }
+            string Decls (append Item ' = ' Item_V ';' [line]);
+            i = (append 'for (var ' Item '_Each : ' L ') {' [line] (i Indent (append Decls Block)) '}');
+        }
+        else
+        {
+            i = (append 'for (var ' Item ' : ' L ')' (i Java_Block));
+        }
+    }
+
+    generate Statement_For_Each_In
+    {
+        string Item [my Item Java];
+        string L (i Java_Each_Of [my List]);
+        flag Declared [false];
+        forgive
+        {
+            object M (i Java_Owner_Method);
+            if ([M.Java_Locals] dexists Item)
+            {
+                Declared = [true];
+            }
+        }
+        if Declared
+        {
+            string Block '';
+            forgive
+            {
+                Block = [my Block Java_Statements];
+            }
+            string Item_V (append Item '_Each');
+            forgive
+            {
+                string IJT (i Java_Loop_Var_Type [my Item]);
+                if (IJT sne 'Object')
+                {
+                    Item_V = (i Java_Cast_Code Item_V IJT);
+                }
+            }
+            string Decls (append Item ' = ' Item_V ';' [line]);
+            i = (append 'for (var ' Item '_Each : ' L ') {' [line] (i Indent (append Decls Block)) '}');
+        }
+        else
+        {
+            i = (append 'for (var ' Item ' : ' L ')' (i Java_Block));
+        }
+    }
+
+    generate Statement_Class
+    {
+        comment `a gal class becomes a package-private top-level class:
+        properties are fields carrying their defaults (java field
+        initializers run before the constructor body, so no default
+        placement machinery is needed), the constructor keeps the class
+        name, and methods translate one to one. the universal Base of a
+        standalone program vanishes`;
+        string Fields '';
+        string Constructor '';
+        string Methods '';
+        list Method_Names;
+        dictionary Method_Codes;
+        list Field_Names;
+        dictionary Field_Codes;
+        string Inits '';
+        string Own_Name '';
+        forgive
+        {
+            object ONE9 [my Class_Name];
+            Own_Name = (ONE9.Get_Input);
+        }
+        flag Has_Body [false];
+        forgive
+        {
+            objects S C;
+            for each S in [my Block Statements]
+            {
+                Has_Body = [true];
+                C = [S.Classification];
+                if (C is a Statement_Constructor)
+                {
+                    Constructor = [S.Java];
+                }
+                else if (C is a Statement_Class_Property)
+                {
+                    object FNE [C.Name];
+                    string FN (FNE.Get_Input);
+                    if (not (Field_Codes dexists FN))
+                    {
+                        push Field_Names FN;
+                    }
+                    Field_Codes FN d= [S.Java];
+                }
+                else if (C is a Statement_Property)
+                {
+                    comment `a property an ancestor already declares must
+                    not re-emit: java fields shadow instead of overriding
+                    (base-typed reads would hit the stale base field), so
+                    the re-declaration becomes an instance-initializer
+                    assignment of the inherited field, mirroring python's
+                    subclass __init__ overwrite`;
+                    object FNE2 [C.Name];
+                    string FN2 (FNE2.Get_Input);
+                    string FT9 '';
+                    forgive
+                    {
+                        i Java_Build_Registry;
+                        if ([my Java_Class_Ancestors] dexists Own_Name)
+                        {
+                            string Anc9 ([my Java_Class_Ancestors] dget Own_Name);
+                            FT9 = (i Java_Field_Type Anc9 FN2);
+                        }
+                    }
+                    if (FT9 sgt '')
+                    {
+                        string IV '';
+                        forgive
+                        {
+                            object VE9 [C.Value];
+                            if (VE9 is an Element)
+                            {
+                                IV = (i Java_Cast VE9 FT9);
+                            }
+                        }
+                        if (IV seq '')
+                        {
+                            IV = 'null';
+                            if ((substring FT9 0 5) s= 'List<')
+                            {
+                                IV = 'new ArrayList<>()';
+                            }
+                            else if ((substring FT9 0 8) s= 'HashMap<')
+                            {
+                                IV = 'new LinkedHashMap<>()';
+                            }
+                        }
+                        append Inits 'this.' FN2 ' = ' IV ';' [line];
+                    }
+                    else
+                    {
+                        if (not (Field_Codes dexists FN2))
+                        {
+                            push Field_Names FN2;
+                        }
+                        Field_Codes FN2 d= [S.Java];
+                    }
+                }
+                else if (C is a Statement_Class_Method)
+                {
+                    object MNE2 [C.Name];
+                    string MN3 (MNE2.Get_Input);
+                    if (not (Method_Codes dexists MN3))
+                    {
+                        push Method_Names MN3;
+                    }
+                    Method_Codes MN3 d= [S.Java];
+                }
+                else if (C is a Statement_Method)
+                {
+                    comment `python method definitions override in place:
+                    the last same-named definition wins, emitted at the
+                    first definition's position`;
+                    object MNE [C.Name];
+                    string MN (MNE.Get_Input);
+                    if (not (Method_Codes dexists MN))
+                    {
+                        push Method_Names MN;
+                    }
+                    Method_Codes MN d= [S.Java];
+                }
+                else if (C is a Statement_Comment)
+                {
+                    append Methods [line] (i Indent [S.Java]) [line];
+                }
+                else
+                {
+                    error 'java generator: statement outside the class contract in class ' [my Class_Name Java];
+                }
+            }
+            string MN2;
+            for each MN2 in Method_Names
+            {
+                append Methods [line] (i Indent (Method_Codes dget MN2)) [line];
+            }
+            string FN3;
+            for each FN3 in Field_Names
+            {
+                append Fields [indent] (Field_Codes dget FN3) [line];
+            }
+            if (Inits sgt '')
+            {
+                append Fields [indent] '{' [line] (i Indent (i Indent Inits)) [indent] '}' [line];
+            }
+        }
+        if (not Has_Body)
+        {
+            comment `bodyless classes still exist: instanceof tests and
+            ancestor links reference them`;
+            i Java_Reflection_Runtime;
+            string Static (append '@SuppressWarnings({"unchecked", "cast", "serial", "rawtypes", "this-escape", "deprecation", "removal"})' [line]);
+            forgive
+            {
+                object PM [my Parent];
+                if (PM is a Statement_Module)
+                {
+                    Static = 'static ';
+                }
+            }
+            string CN2 (i Java_Class_Ref [my Class_Name Java]);
+            string AN2 '';
+            forgive
+            {
+                string A3 [my Ancestor Java];
+                if (not (A3 is an Element))
+                {
+                    AN2 = (i Java_Class_Ref A3);
+                }
+            }
+            if (AN2 seq '')
+            {
+                AN2 = 'galrt.GalBase';
+            }
+            string Inherited2 (i Java_Inherited_Constructors CN2);
+            if (Inherited2 seq '')
+            {
+                i = (append Static 'class ' CN2 ' extends ' AN2 ' {}');
+            }
+            else
+            {
+                i = (append Static 'class ' CN2 ' extends ' AN2 ' {' (i Indent Inherited2) [line] '}');
+            }
+        }
+        else
+        {
+            i Java_Reflection_Runtime;
+            string Static2 (append '@SuppressWarnings({"unchecked", "cast", "serial", "rawtypes", "this-escape", "deprecation", "removal"})' [line]);
+            forgive
+            {
+                object PM2 [my Parent];
+                if (PM2 is a Statement_Module)
+                {
+                    Static2 = 'static ';
+                }
+            }
+            string CN (i Java_Class_Ref [my Class_Name Java]);
+            string Ancestor '';
+            forgive
+            {
+                string A2 [my Ancestor Java];
+                if (not (A2 is an Element))
+                {
+                    Ancestor = (i Java_Class_Ref A2);
+                }
+            }
+            if (Ancestor seq '')
+            {
+                Ancestor = 'galrt.GalBase';
+            }
+            string Code Static2 'class ' CN ' extends ' Ancestor ' {' [line] Fields;
+            if (Constructor seq '')
+            {
+                Constructor = (i Java_Inherited_Constructors CN);
+            }
+            if (Constructor sgt '')
+            {
+                append Code [line] (i Indent Constructor) [line];
+            }
+            append Code Methods '}';
+            i = Code;
+        }
+    }
+
+    generate Property_Statement
+    {
+        i = (i Java_Property '');
+    }
+
+    generate Statement_Class_Property
+    {
+        i = (i Java_Property 'static ');
+    }
+
+    generate Statement_Constructor
+    {
+        object Cls = (i Get_Owner_Class);
+        string CN (i Java_Class_Ref [Cls.Class_Name Java]);
+        string Code (append CN '(' (i Java_Params) ')');
+        string Inner '';
+        forgive
+        {
+            Inner = [my Block Java_Statements];
+        }
+        append Code ' {' [line] (i Indent (append (i Java_Hoist) Inner)) '}';
+        append Code (i Java_Default_Overloads CN 'this' '');
+        i = Code;
+    }
+
+    generate Statement_Method
+    {
+        i = (i Java_Method '');
+    }
+
+    generate Statement_Class_Method
+    {
+        i = (i Java_Method 'static ');
+    }
+
+    generate Argument_Syntax
+    {
+        comment `the declaring method or constructor emits delegating
+        overloads for a defaulted tail; a defaulted parameter itself takes
+        the boxed type, because its default is null`;
+        string T '';
+        forgive
+        {
+            string T2 [my Data_Type];
+            if (not (T2 is an Element))
+            {
+                T = T2;
+            }
+        }
+        if (T seq '')
+        {
+            error 'java generator: untyped argument ' [my Variable Java];
+        }
+        string JT (i Java_Type T);
+        forgive
+        {
+            if (not ([my Default_Value] is null))
+            {
+                JT = (i Java_Boxed_Type T);
+            }
+        }
+        i = (append JT ' ' [my Variable Java]);
+    }
+
+    generate Syntax_My
+    {
+        comment `the first link resolves directly when the enclosing class
+        declares it (typed, fast); any undeclared or chained-past-object
+        link goes through the reflective Gal.get with python attribute
+        semantics`;
+        i Java_Reflection_Runtime;
+        string Code 'this';
+        string Cls (i Java_Owner_Class_Name);
+        object Arg;
+        for each Arg in [my Arguments]
+        {
+            string P [Arg.Java];
+            my Java_Set_Object = Code;
+            my Java_Set_Name = P;
+            string FT '';
+            if (Cls sgt '')
+            {
+                FT = (i Java_Field_Type Cls P);
+            }
+            if (FT sgt '')
+            {
+                Code = (append Code '.' P);
+                my Java_Static_Type = FT;
+            }
+            else
+            {
+                Code = (append 'galrt.get(' Code ', "' P '")');
+                my Java_Static_Type = '';
+            }
+            Cls = '';
+        }
+        i = Code;
+    }
+
+    generate Statement_My_Equal
+    {
+        i Java_Reflection_Runtime;
+        string P [my Property_Name Java];
+        string V [my Value Java];
+        string Cls (i Java_Owner_Class_Name);
+        string FT '';
+        if (Cls sgt '')
+        {
+            FT = (i Java_Field_Type Cls P);
+        }
+        if (FT sgt '')
+        {
+            i = (append 'this.' P ' = ' (i Java_Cast [my Value] FT) ';');
+        }
+        else
+        {
+            i = (append 'galrt.set(this, "' P '", ' V ');');
+        }
+    }
+
+    generate Statement_Call
+    {
+        i Java_Reflection_Runtime;
+        string Args (i Java_Args ', ');
+        string Code (append 'galrt.call(' [my Object Java] ', "' [my Method Java] '"');
+        if (Args sgt '')
+        {
+            append Code ', ' Args;
+        }
+        append Code ');';
+        i = Code;
+    }
+
+    generate Operation_New
+    {
+        comment `a plain class name news directly; a computed class (new
+        [my class]) goes through the reflective Gal.create, matching
+        constructors by argument count (the delegating default overloads
+        make the counts line up)`;
+        string CN [my Class_Name Java];
+        if ((CN contains '.') or (CN contains '('))
+        {
+            i Java_Helper (append 'static Object create(Class<?> c, Object... args) {' [line]
+                [indent] 'try {' [line]
+                [indent] [indent] 'for (var k : c.getDeclaredConstructors()) { if (k.getParameterCount() == args.length) return k.newInstance(args); }' [line]
+                [indent] [indent] 'throw new RuntimeException("no constructor: " + c);' [line]
+                [indent] '} catch (Exception e) {' [line]
+                [indent] [indent] 'throw new RuntimeException(e);' [line]
+                [indent] '}' [line] '}');
+            string Args (i Java_Args ', ');
+            string Code (append 'galrt.create(' CN);
+            if (Args sgt '')
+            {
+                append Code ', ' Args;
+            }
+            append Code ')';
+            i = Code;
+        }
+        else
+        {
+            i = (append 'new ' (i Java_Class_Ref CN) '(' (i Java_Args ', ') ')');
+        }
+    }
+
+    generate Statement_Return
+    {
+        string Code 'return';
+        flag Bare [true];
+        forgive
+        {
+            if (defined [my Value])
+            {
+                Bare = [false];
+                string V [my Value Java];
+                string RT '';
+                forgive
+                {
+                    object M (i Java_Owner_Method);
+                    if (not (M is null))
+                    {
+                        RT = (M.Java_Effective_Return_Type);
+                    }
+                }
+                if (RT s= 'void')
+                {
+                    comment `the ancestor declares this method void, so
+                    the returned value drops`;
+                    V = '';
+                }
+                else if (RT s= 'boolean')
+                {
+                    comment `python-truthy numeric returns in flag methods`;
+                    if (V s= '1')
+                    {
+                        V = 'true';
+                    }
+                    else if (V s= '0')
+                    {
+                        V = 'false';
+                    }
+                    else
+                    {
+                        i Java_Reflection_Runtime;
+                        V = (append 'galrt.truthy(' V ')');
+                    }
+                }
+                else if ((RT s= 'int') or (RT s= 'double'))
+                {
+                    if (V s= 'true')
+                    {
+                        V = '1';
+                    }
+                    else if (V s= 'false')
+                    {
+                        V = '0';
+                    }
+                    else
+                    {
+                        V = (i Java_Cast [my Value] RT);
+                    }
+                }
+                else if (RT sgt '')
+                {
+                    V = (i Java_Cast [my Value] RT);
+                }
+                if (V sgt '')
+                {
+                    append Code ' ' V;
+                }
+            }
+        }
+        if Bare
+        {
+            comment `a bare return in a value-typed method: python returns
+            None, java needs a value of the declared type`;
+            string RT2 '';
+            forgive
+            {
+                object M2 (i Java_Owner_Method);
+                if (not (M2 is null))
+                {
+                    RT2 = (M2.Java_Effective_Return_Type);
+                }
+            }
+            if ((RT2 sgt '') and (RT2 sne 'void'))
+            {
+                string D2 'null';
+                if (RT2 s= 'int')
+                {
+                    D2 = '0';
+                }
+                else if (RT2 s= 'double')
+                {
+                    D2 = '0.0';
+                }
+                else if (RT2 s= 'boolean')
+                {
+                    D2 = 'false';
+                }
+                append Code ' ' D2;
+            }
+        }
+        append Code ';';
+        i = Code;
+    }
+
+    generate Operation_Add
+        (i Java_Numeric_Infix [my Op1] [my Op2] ' + ');
+    generate Operation_Minus
+        (i Java_Numeric_Infix [my Op1] [my Op2] ' - ');
+    generate Operation_Multiply
+        (i Java_Numeric_Infix [my Op1] [my Op2] ' * ');
+    generate Operation_Divide
+        (i Java_Numeric_Infix [my Op1] [my Op2] ' / ');
+    generate Operation_Modulo
+        (i Java_Numeric_Infix [my Op1] [my Op2] ' % ');
+    generate Operation_Greater
+        (i Java_Numeric_Infix [my Op1] [my Op2] ' > ');
+    generate Operation_Less
+        (i Java_Numeric_Infix [my Op1] [my Op2] ' < ');
+    generate Operation_Greater_Equal
+        (i Java_Numeric_Infix [my Op1] [my Op2] ' >= ');
+    generate Operation_Less_Equal
+        (i Java_Numeric_Infix [my Op1] [my Op2] ' <= ');
+    generate Operation_Equal
+    {
+        comment `== only when both sides are known primitives; otherwise
+        Objects.equals gives python's value semantics (strings compare by
+        value, null compares quietly, boxed numbers unbox consistently)`;
+        string T1 (i Java_Arg_Data_Type [my Op1]);
+        string T2 (i Java_Arg_Data_Type [my Op2]);
+        flag P1 [false];
+        if (((T1 s= 'integer') or (T1 s= 'number')) or (T1 s= 'flag'))
+        {
+            P1 = [true];
+        }
+        flag P2 [false];
+        if (((T2 s= 'integer') or (T2 s= 'number')) or (T2 s= 'flag'))
+        {
+            P2 = [true];
+        }
+        flag F1 (T1 s= 'flag');
+        flag F2 (T2 s= 'flag');
+        if (P1 and P2)
+        {
+            if (F1 = F2)
+            {
+                i = (i Java_Infix [my Op1] [my Op2] ' == ');
+            }
+            else
+            {
+                comment `python compares booleans and numbers by value
+                (False == 0), so a mixed comparison goes numeric`;
+                i = (i Java_Numeric_Infix [my Op1] [my Op2] ' == ');
+            }
+        }
+        else
+        {
+            i = (append '(java.util.Objects.equals(' [my Op1 Java] ', ' [my Op2 Java] '))');
+        }
+    }
+    generate Operation_Not_Equal
+    {
+        string T1 (i Java_Arg_Data_Type [my Op1]);
+        string T2 (i Java_Arg_Data_Type [my Op2]);
+        flag P1 [false];
+        if (((T1 s= 'integer') or (T1 s= 'number')) or (T1 s= 'flag'))
+        {
+            P1 = [true];
+        }
+        flag P2 [false];
+        if (((T2 s= 'integer') or (T2 s= 'number')) or (T2 s= 'flag'))
+        {
+            P2 = [true];
+        }
+        flag F1 (T1 s= 'flag');
+        flag F2 (T2 s= 'flag');
+        if (P1 and P2)
+        {
+            if (F1 = F2)
+            {
+                i = (i Java_Infix [my Op1] [my Op2] ' != ');
+            }
+            else
+            {
+                i = (i Java_Numeric_Infix [my Op1] [my Op2] ' != ');
+            }
+        }
+        else
+        {
+            i = (append '(!java.util.Objects.equals(' [my Op1 Java] ', ' [my Op2 Java] '))');
+        }
+    }
+    generate Operation_And
+        '(' (i Java_Cond [my Op1]) ' && ' (i Java_Cond [my Op2]) ')';
+
+    generate Operation_Or
+        '(' (i Java_Cond [my Op1]) ' || ' (i Java_Cond [my Op2]) ')';
+
+    generate Operation_Not
+        '(!' (i Java_Cond [my Op1]) ')';
+
+    generate Statement_I
+    {
+        comment `a self-call stays a direct (typed, fast) invocation when
+        the owner class hierarchy declares the method and every argument
+        is typed; otherwise it goes through the reflective Gal.call`;
+        i Java_Reflection_Runtime;
+        string M [my Method Java];
+        string Args (i Java_Args ', ');
+        string Cls (i Java_Owner_Class_Name);
+        flag Direct [false];
+        if (Cls sgt '')
+        {
+            if ((i Java_Method_Declared Cls M) s= 'y')
+            {
+                Direct = [true];
+            }
+        }
+        if Direct
+        {
+            object Arg;
+            for each Arg in [my Listargs]
+            {
+                if (i Java_Reflected [Arg.Java])
+                {
+                    Direct = [false];
+                }
+            }
+        }
+        if Direct
+        {
+            i = (append 'this.' M '(' (i Java_Direct_Args Cls M) ');');
+        }
+        else
+        {
+            string Code (append 'galrt.call(this, "' M '"');
+            if (Args sgt '')
+            {
+                append Code ', ' Args;
+            }
+            append Code ');';
+            i = Code;
+        }
+    }
+
+    generate Operation_I
+    {
+        i Java_Reflection_Runtime;
+        string M [my Method Java];
+        string Args (i Java_Args ', ');
+        string Cls (i Java_Owner_Class_Name);
+        flag Direct [false];
+        if (Cls sgt '')
+        {
+            if ((i Java_Method_Declared Cls M) s= 'y')
+            {
+                Direct = [true];
+            }
+        }
+        if Direct
+        {
+            object Arg;
+            for each Arg in [my Listargs]
+            {
+                if (i Java_Reflected [Arg.Java])
+                {
+                    Direct = [false];
+                }
+            }
+        }
+        if Direct
+        {
+            i = (append 'this.' M '(' (i Java_Direct_Args Cls M) ')');
+        }
+        else
+        {
+            string Code (append 'galrt.call(this, "' M '"');
+            if (Args sgt '')
+            {
+                append Code ', ' Args;
+            }
+            append Code ')';
+            i = Code;
+        }
+    }
+
+    generate Statement_Error
+    {
+        comment `wrapped in if (true) so python-reachable code after a
+        raise stays legal under java's reachability analysis`;
+        i = (append 'if (true) throw new RuntimeException(' (i Java_Append [my Arguments]) ');');
+    }
+
+    generate Statement_Debug
+    {
+        comment `the jvm has no resident debugger for unattended builds, so
+        reaching a debug marks an error, mirroring the node backend`;
+        i = 'if (true) throw new RuntimeException("Debugger not implemented");';
+    }
+
+    generate Statement_Break
+        'break;';
+
+    generate Statement_Continue
+        'continue;';
+
+    generate Statement_Forever
+        'while (true)' (i Java_Block);
+
+    generate Statement_Increment
+    {
+        object T [my Destination];
+        string TC [T.Java];
+        if (i Java_Reflected TC)
+        {
+            object C [T.Classification];
+            i = (append 'galrt.set(' [C.Java_Set_Object] ', "' [C.Java_Set_Name] '", ' (i Java_Coerce TC 'int') ' + 1);');
+        }
+        else
+        {
+            i = (append TC ' += 1;');
+        }
+    }
+
+    generate Statement_Decrement
+    {
+        object T [my Destination];
+        string TC [T.Java];
+        if (i Java_Reflected TC)
+        {
+            object C [T.Classification];
+            i = (append 'galrt.set(' [C.Java_Set_Object] ', "' [C.Java_Set_Name] '", ' (i Java_Coerce TC 'int') ' - 1);');
+        }
+        else
+        {
+            i = (append TC ' -= 1;');
+        }
+    }
+
+    generate Statement_Return_If
+    {
+        string Condition (i Java_Cond [my Condition]);
+        string Code 'if (' Condition ') return';
+        if [my Value]
+        {
+            string RV (i Java_Return_Value [my Value]);
+            if (RV sgt '')
+            {
+                append Code ' ' RV;
+            }
+        }
+        append Code ';';
+        i = Code;
+    }
+
+    generate Statement_If_Return
+    {
+        string Condition (i Java_Cond [my Condition]);
+        string Code 'if (' Condition ') return';
+        if [my Value]
+        {
+            string RV (i Java_Return_Value [my Value]);
+            if (RV sgt '')
+            {
+                append Code ' ' RV;
+            }
+        }
+        append Code ';';
+        i = Code;
+    }
+
+    generate Operation_Is_Null
+        '(' Op1 ' == null || ' Op1 '.equals(""))';
+
+    generate Operation_Not_Null
+        '(' Op1 ' != null && !' Op1 '.equals(""))';
+
+    generate Operation_Is_A
+    {
+        comment `the receiver upcasts to Object so provably-disjoint
+        static types (a String probe against an element class) still
+        compile; instanceof itself is the runtime truth`;
+        string Object_Code (append '((Object) ' [my Object Java] ')');
+        string Code '';
+        string Between '';
+        object Arg;
+        for each Arg in [my Listargs]
+        {
+            append Code Between Object_Code ' instanceof ' (i Java_Class_Ref [Arg.Java]);
+            Between = ' || ';
+        }
+        Code = (append '(' Code ')');
+        i = Code;
+    }
+
+    generate Operation_String_Equal
+        '((' ([my Op1].Java_String) ').equals(' ([my Op2].Java_String) '))';
+
+    generate Operation_String_Not_Equal
+        '(!(' ([my Op1].Java_String) ').equals(' ([my Op2].Java_String) '))';
+
+    generate Operation_List_Length
+    {
+        comment `python len serves strings, lists and dicts; only a
+        statically list-typed receiver keeps .size()`;
+        string T (i Java_Arg_Data_Type [my List]);
+        if (T s= 'list')
+        {
+            i = (append [my List Java] '.size()');
+        }
+        else if (T s= 'dictionary')
+        {
+            i = (append [my List Java] '.size()');
+        }
+        else
+        {
+            i Java_Helper (append 'static int len(Object x) {' [line]
+                [indent] 'if (x instanceof String s) return s.length();' [line]
+                [indent] 'if (x instanceof java.util.List<?> l) return l.size();' [line]
+                [indent] 'if (x instanceof java.util.Map<?, ?> m) return m.size();' [line]
+                [indent] 'throw new Undefined();' [line] '}');
+            i = (append 'galrt.len(' [my List Java] ')');
+        }
+    }
+
+    generate Syntax_Null
+        'null';
+
+    generate Syntax_Self
+        'this';
+
+    generate Declaration_Statement
+    {
+        comment `the generic declaration: the keyword maps through
+        Java_Type, covering variant and anything the specific declaration
+        generators skip`;
+        string JT 'Object';
+        forgive
+        {
+            JT = (i Java_Type [my Keyword]);
+        }
+        string Value '';
+        forgive
+        {
+            if (not ([my Value] is null))
+            {
+                Value = [my Value Java];
+            }
+        }
+        if (Value seq '')
+        {
+            Value = (i Java_Default JT);
+        }
+        string Name [my Name Java];
+        string Decl (append JT ' ');
+        if (i Java_Declare Name JT)
+        {
+            Decl = '';
+        }
+        i = (append Decl Name ' = ' Value ';');
+    }
+
+    generate Declarations_Statement
+    {
+        comment `a plural declaration (objects A B): the singular of the
+        keyword maps through Java_Type, defaulting to Object`;
+        string JT 'Object';
+        forgive
+        {
+            string K [my Keyword];
+            integer KL (length K);
+            K = (substring K 0 (KL - 1));
+            JT = (i Java_Type K);
+        }
+        string Init (i Java_Default JT);
+        string Code '';
+        string Between '';
+        object Arg;
+        for each Arg in [my Arguments]
+        {
+            string Decl (append JT ' ');
+            if (i Java_Declare [Arg.Java] JT)
+            {
+                Decl = '';
+            }
+            append Code Between Decl [Arg.Java] ' = ' Init ';';
+            Between = [line];
+        }
+        i = Code;
+    }
+
+    generate Statement_Global_List
+    {
+        i Java_Import 'java.util.List';
+        i Java_Import 'java.util.ArrayList';
+        string Name [my Name Java];
+        string Decl 'List<Object> ';
+        if (i Java_Declare Name 'List<Object>')
+        {
+            Decl = '';
+        }
+        i = (append Decl Name ' = new ArrayList<>();');
+    }
+
+    generate Statement_Push
+    {
+        comment `one .add per argument: gal push appends each argument`;
+        string List (append '((java.util.List<Object>)(java.util.List<?>) ' [my List Java] ')');
+        string Code '';
+        string Between '';
+        object Arg;
+        for each Arg in [my Listargs]
+        {
+            append Code Between List '.add(' [Arg.Java] ');';
+            Between = [line];
+        }
+        i = Code;
+    }
+
+    generate Operation_Shift
+        (i Java_List_Of [my List]) '.remove(0)';
+
+    generate Operation_Pop
+    {
+        i Java_Helper (append 'static Object pop(Object l0) {' [line]
+            [indent] 'var l = (java.util.List<Object>) l0;' [line]
+            [indent] 'return l.remove(l.size() - 1);' [line] '}');
+        i = (append 'galrt.pop(' [my List Java] ')');
+    }
+
+    generate Operation_List_Last
+    {
+        i Java_Helper (append 'static Object last(Object l0) {' [line]
+            [indent] 'var l = (java.util.List<Object>) l0;' [line]
+            [indent] 'return l.get(l.size() - 1);' [line] '}');
+        i = (append 'galrt.last(' [my List Java] ')');
+    }
+
+    generate Operation_List_Get
+        (i Java_List_Of [my List]) '.get(' (i Java_Cast [my Offset] 'int') ')';
+
+    generate Statement_List_Clear
+        (i Java_List_Of [my List]) '.clear();';
+
+    generate Statement_List_Copy
+    {
+        i Java_Import 'java.util.List';
+        i Java_Import 'java.util.ArrayList';
+        string Variable [my Target Java];
+        string Value 'new ArrayList<Object>()';
+        defined [my Source]
+        {
+            Value = (append 'new ArrayList<Object>(' (i Java_Cast_Code [my Source Java] 'List<Object>') ')');
+        }
+        if (i Java_Reflected Variable)
+        {
+            i = (i Java_Assign [my Target] Value);
+        }
+        else
+        {
+            string Decl 'List<Object> ';
+            if (i Java_Declare Variable 'List<Object>')
+            {
+                Decl = '';
+            }
+            i = (append Decl Variable ' = ' Value ';');
+        }
+    }
+
+    generate Statement_List_Split
+    {
+        i Java_Helper (append 'static java.util.List<Object> split(String s, String d) {' [line]
+            [indent] 'return new java.util.ArrayList<Object>(java.util.Arrays.asList(s.split(java.util.regex.Pattern.quote(d), -1)));' [line] '}');
+        string V [my Variable Java];
+        if (i Java_Reflected V)
+        {
+            i = (i Java_Assign [my Variable] (append 'galrt.split(' [my String Java] ', ' [my Delimiter Java] ')'));
+        }
+        else
+        {
+            string Decl 'java.util.List<Object> ';
+            if (i Java_Declare V 'java.util.List<Object>')
+            {
+                Decl = '';
+            }
+            i = (append Decl V ' = galrt.split(' [my String Java] ', ' [my Delimiter Java] ');');
+        }
+    }
+
+    generate Statement_Join
+    {
+        i Java_Helper (append 'static String join(String d, Object l0) {' [line]
+            [indent] 'var l = (java.util.List<Object>) l0;' [line]
+            [indent] 'StringBuilder b = new StringBuilder();' [line]
+            [indent] 'for (int i = 0; i < l.size(); i++) { if (i > 0) b.append(d); b.append(l.get(i)); }' [line]
+            [indent] 'return b.toString();' [line] '}');
+        string V [my Variable Java];
+        if (i Java_Reflected V)
+        {
+            i = (i Java_Assign [my Variable] (append 'galrt.join(' [my Delimiter Java] ', ' [my List Java] ')'));
+        }
+        else
+        {
+            string Decl 'String ';
+            if (i Java_Declare V 'String')
+            {
+                Decl = '';
+            }
+            i = (append Decl V ' = galrt.join(' [my Delimiter Java] ', ' [my List Java] ');');
+        }
+    }
+
+    generate Operation_Join
+    {
+        i Java_Helper (append 'static String join(String d, Object l0) {' [line]
+            [indent] 'var l = (java.util.List<Object>) l0;' [line]
+            [indent] 'StringBuilder b = new StringBuilder();' [line]
+            [indent] 'for (int i = 0; i < l.size(); i++) { if (i > 0) b.append(d); b.append(l.get(i)); }' [line]
+            [indent] 'return b.toString();' [line] '}');
+        i = (append 'galrt.join(' [my Separator Java] ', ' [my List Java] ')');
+    }
+
+    generate Operation_Split
+    {
+        i Java_Helper (append 'static java.util.List<Object> split(String s, String d) {' [line]
+            [indent] 'return new java.util.ArrayList<Object>(java.util.Arrays.asList(s.split(java.util.regex.Pattern.quote(d), -1)));' [line] '}');
+        i = (append 'galrt.split(' [my String Java] ', ' [my Delimiter Java] ')');
+    }
+
+    generate Statement_Forgive
+        'try' (i Java_Block) ' catch (Exception Forgiven_Error) {' [line] '}';
+
+    generate Statement_Try
+        'try' (i Java_Block);
+
+    generate Statement_Catch
+    {
+        string E 'Caught_Error';
+        forgive
+        {
+            E = [my Error Java];
+        }
+        flag Declared [false];
+        forgive
+        {
+            object M (i Java_Owner_Method);
+            if ([M.Java_Locals] dexists E)
+            {
+                Declared = [true];
+            }
+        }
+        if Declared
+        {
+            comment `the error name is already a method local, so the
+            catch binds a fresh name and assigns its rendering across`;
+            string Block '';
+            forgive
+            {
+                Block = [my Block Java_Statements];
+            }
+            string Decls (append E ' = java.lang.String.valueOf(' E '_Exc);' [line]);
+            i = (append 'catch (Exception ' E '_Exc) {' [line] (i Indent (append Decls Block)) '}');
+        }
+        else
+        {
+            string Code 'catch (Exception ' E ')';
+            append Code (i Java_Block);
+            i = Code;
+        }
+    }
+
+    generate Operation_Defined
+        '(' Variable ' != null)';
+
+    generate Statement_Defined
+    {
+        comment `mirrors the python try/raise shape: a null guard argument
+        raises, and the catch also absorbs NullPointerException, java's
+        analogue of the AttributeError python swallows here`;
+        i Java_Helper 'static class Undefined extends RuntimeException {}';
+        string Ifargs '';
+        object Argument;
+        for each Argument in [my Arguments]
+        {
+            append Ifargs 'if (' [Argument.Java] ' == null) {' [line]
+                [indent] 'throw new galrt.Undefined();' [line] '}' [line];
+        }
+        string Block '';
+        forgive
+        {
+            Block = [my Block Java_Statements];
+        }
+        string Code 'try {' [line] (i Indent (append Ifargs Block)) '} catch (galrt.Undefined | NullPointerException Undefined_Error) {' [line] '}';
+        i = Code;
+    }
+
+    generate Statement_Undefined
+    {
+        i Java_Helper 'static class Undefined extends RuntimeException {}';
+        string Ifargs '';
+        object Argument;
+        for each Argument in [my Arguments]
+        {
+            append Ifargs 'if (' [Argument.Java] ' == null) {' [line]
+                [indent] 'throw new galrt.Undefined();' [line] '}' [line];
+        }
+        string Code 'try {' [line] (i Indent Ifargs) '} catch (galrt.Undefined | NullPointerException Undefined_Error)' (i Java_Block);
+        i = Code;
+    }
+
+    generate Statement_Propset
+    {
+        i Java_Reflection_Runtime;
+        i Java_Build_Registry;
+        string O [my Object Java];
+        flag O_Local [false];
+        forgive
+        {
+            object ML2 (i Java_Owner_Method);
+            if ([ML2.Java_Locals] dexists O)
+            {
+                O_Local = [true];
+            }
+        }
+        if ((not O_Local) and ([my Java_Classes] dexists O))
+        {
+            comment `a class-name target assigns the static field directly`;
+            i = (append (i Java_Class_Ref O) '.' [my Property Java] ' = ' [my Value Java] ';');
+        }
+        else
+        {
+            i = (append 'galrt.set(' O ', "' [my Property Java] '", ' [my Value Java] ');');
+        }
+    }
+
+    generate Operation_Call
+    {
+        i Java_Reflection_Runtime;
+        string Args (i Java_Args ', ');
+        string Code (append 'galrt.call(' [my Object Java] ', "' [my Method Java] '"');
+        if (Args sgt '')
+        {
+            append Code ', ' Args;
+        }
+        append Code ')';
+        i = Code;
+    }
+
+    generate Operation_Append
+        '(' (i Java_Append [my Arguments]) ')';
+
+    generate Operation_Contains
+    {
+        comment `always dispatched through the helper: the receiver may be
+        a string, a list or a dictionary, and static types cannot be
+        trusted for probe variables`;
+        i Java_Reflection_Runtime;
+        i Java_Helper (append 'static boolean contains(Object c, Object x) {' [line]
+            [indent] 'if (c instanceof String s) return s.contains(java.lang.String.valueOf(x));' [line]
+            [indent] 'if (c instanceof java.util.List<?> l) return l.contains(x);' [line]
+            [indent] 'if (c instanceof java.util.Map<?, ?> m) return m.containsKey(x);' [line]
+            [indent] 'if (c == null) throw new Undefined();' [line]
+            [indent] 'throw new RuntimeException("contains: " + c.getClass());' [line] '}');
+        i = (append 'galrt.contains(' [my String Java] ', ' [my Search Java] ')');
+    }
+
+    generate Operation_Substring
+    {
+        comment `python slices clamp out-of-range indexes, so the helper
+        clamps rather than letting String.substring throw`;
+        i Java_Helper (append 'static String substring(String s, int start) {' [line]
+            [indent] 'if (start < 0) start = 0;' [line]
+            [indent] 'if (start > s.length()) start = s.length();' [line]
+            [indent] 'return s.substring(start);' [line] '}');
+        i Java_Helper (append 'static String substring(String s, int start, int len) {' [line]
+            [indent] 'if (start < 0) start = 0;' [line]
+            [indent] 'if (start > s.length()) start = s.length();' [line]
+            [indent] 'int end = start + len;' [line]
+            [indent] 'if (end > s.length()) end = s.length();' [line]
+            [indent] 'if (end < start) end = start;' [line]
+            [indent] 'return s.substring(start, end);' [line] '}');
+        string SVal (i Java_Cast [my String_Value] 'String');
+        string Start (i Java_Cast [my Start_Index] 'int');
+        string Code;
+        if (defined [my Length])
+        {
+            Code = (append 'galrt.substring(' SVal ', ' Start ', ' (i Java_Cast [my Length] 'int') ')');
+        }
+        else
+        {
+            Code = (append 'galrt.substring(' SVal ', ' Start ')');
+        }
+        i = Code;
+    }
+
+    generate Operation_Length
+        ([my First].Java_String) '.length()';
+
+    generate Operation_String
+        ([my Op1].Java_String);
+
+    generate Statement_File_Read
+    {
+        i Java_Helper (append 'static String read_file(String name) {' [line]
+            [indent] 'try {' [line]
+            [indent] [indent] 'return java.nio.file.Files.readString(java.nio.file.Path.of(name));' [line]
+            [indent] '} catch (java.io.IOException e) {' [line]
+            [indent] [indent] 'throw new RuntimeException(e);' [line]
+            [indent] '}' [line] '}');
+        i = (append [my Variable Java] ' = galrt.read_file(' (i Java_Cast [my File_Name] 'String') ');');
+    }
+
+    generate Statement_Write_To
+    {
+        i Java_Helper (append 'static void write_file(String name, String text) {' [line]
+            [indent] 'try {' [line]
+            [indent] [indent] 'java.nio.file.Files.writeString(java.nio.file.Path.of(name), text);' [line]
+            [indent] '} catch (java.io.IOException e) {' [line]
+            [indent] [indent] 'throw new RuntimeException(e);' [line]
+            [indent] '}' [line] '}');
+        i = (append 'galrt.write_file(' (i Java_Cast [my File] 'String') ', ' (i Java_Cast [my Text] 'String') ');');
+    }
+
+    generate Operation_Dict_Exists
+        (i Java_Dict_Of [my Dictionary]) '.containsKey(' (i Java_Cast [my Key] 'String') ')';
+
+    generate Operation_Is_Whitespace
+        '" \n\r\t".contains(' Character ')';
+
+    generate Operation_Is_Ident
+        '"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_0123456789".contains(' Character ')';
+
+    generate Operation_Is_Upper
+    {
+        i Java_Helper (append 'static boolean is_upper(String s) {' [line]
+            [indent] 'boolean cased = false;' [line]
+            [indent] 'for (int i = 0; i < s.length(); i++) { char c = s.charAt(i); if (java.lang.Character.isLowerCase(c)) return false; if (java.lang.Character.isUpperCase(c)) cased = true; }' [line]
+            [indent] 'return cased;' [line] '}');
+        i = (append 'galrt.is_upper(' [my First Java] ')');
+    }
+
+    generate Operation_Is_Lower
+    {
+        i Java_Helper (append 'static boolean is_lower(String s) {' [line]
+            [indent] 'boolean cased = false;' [line]
+            [indent] 'for (int i = 0; i < s.length(); i++) { char c = s.charAt(i); if (java.lang.Character.isUpperCase(c)) return false; if (java.lang.Character.isLowerCase(c)) cased = true; }' [line]
+            [indent] 'return cased;' [line] '}');
+        i = (append 'galrt.is_lower(' [my First Java] ')');
+    }
+
+    generate Operation_Is_Punctuation
+    {
+        comment `ascii 33..126 minus letters and digits equals python's
+        string.punctuation, written as character codes to keep quote
+        characters out of this source`;
+        i Java_Helper (append 'static boolean is_punct(String s) {' [line]
+            [indent] 'if (s.isEmpty()) return false;' [line]
+            [indent] 'char c = s.charAt(0);' [line]
+            [indent] 'return c >= 33 && c <= 126 && !java.lang.Character.isLetterOrDigit(c);' [line] '}');
+        i = (append 'galrt.is_punct(' [my Character Java] ')');
+    }
+
+    generate Operation_Is_Numeric
+    {
+        comment `a type test on the value, steered by the inferred data
+        type; python counts booleans as numeric (bool is an int subclass),
+        so the variant path includes Boolean`;
+        string T (i Java_Arg_Data_Type [my Character]);
+        if (((T s= 'integer') or (T s= 'number')) or (T s= 'flag'))
+        {
+            i = 'true';
+        }
+        else if (T s= 'string')
+        {
+            i = 'false';
+        }
+        else
+        {
+            i = (append '(' [my Character Java] ' instanceof Integer || ' [my Character Java] ' instanceof Double || ' [my Character Java] ' instanceof Boolean)');
+        }
+    }
+
+    generate Statement_Iterate
+    {
+        comment `dictionary iteration: the entry variable takes the key
+        variable's name with an _Entry suffix, and the key and value
+        variables declare at the top of the block`;
+        string K [my Key_Variable Java];
+        string V [my Value_Variable Java];
+        string D [my Dictionary Java];
+        string Block '';
+        forgive
+        {
+            Block = [my Block Java_Statements];
+        }
+        string KD (append 'var ' K);
+        string VD (append 'var ' V);
+        forgive
+        {
+            object M (i Java_Owner_Method);
+            if ([M.Java_Locals] dexists K)
+            {
+                KD = K;
+            }
+            if ([M.Java_Locals] dexists V)
+            {
+                VD = V;
+            }
+        }
+        string VV (append K '_Entry.getValue()');
+        forgive
+        {
+            string VJT (i Java_Loop_Var_Type [my Value_Variable]);
+            if (VJT sne 'Object')
+            {
+                VV = (i Java_Cast_Code VV VJT);
+            }
+        }
+        string Decls (append KD ' = ' K '_Entry.getKey();' [line] VD ' = ' VV ';' [line]);
+        string Code 'for (var ' K '_Entry : ' (i Java_Dict_Of [my Dictionary]) '.entrySet()) {' [line] (i Indent (append Decls Block)) '}';
+        i = Code;
+    }
+
+    generate Operation_String_Greater
+        '((' ([my Op1].Java_String) ').compareTo(' ([my Op2].Java_String) ') > 0)';
+
+    generate Operation_String_Less
+        '((' ([my Op1].Java_String) ').compareTo(' ([my Op2].Java_String) ') < 0)';
+
+    generate Operation_String_Greater_Equal
+        '((' ([my Op1].Java_String) ').compareTo(' ([my Op2].Java_String) ') >= 0)';
+
+    generate Operation_String_Less_Equal
+        '((' ([my Op1].Java_String) ').compareTo(' ([my Op2].Java_String) ') <= 0)';
+
+    generate Statement_Replace
+    {
+        string V [my Variable Java];
+        i = (append V ' = ' (i Java_Cast_Code V 'String') '.replace(' (i Java_Cast [my Search_Text] 'String') ', ' (i Java_Cast [my Replace_Text] 'String') ');');
+    }
+
+    generate Statement_Add
+    {
+        object T [my Destination];
+        string TC [T.Java];
+        string Inc (i Java_Coerce [my Increment Java] 'int');
+        if (i Java_Reflected TC)
+        {
+            object C [T.Classification];
+            i = (append 'galrt.set(' [C.Java_Set_Object] ', "' [C.Java_Set_Name] '", ' (i Java_Coerce TC 'int') ' + ' Inc ');');
+        }
+        else
+        {
+            i = (append TC ' += ' Inc ';');
+        }
+    }
+
+    generate Operation_File_Exists
+        'new java.io.File(' Path ').exists()';
+
+    generate Operation_Is_Not_A
+    {
+        string Object_Code (append '((Object) ' [my Object Java] ')');
+        string Code '';
+        string Between '';
+        object Arg;
+        for each Arg in [my Listargs]
+        {
+            append Code Between Object_Code ' instanceof ' (i Java_Class_Ref [Arg.Java]);
+            Between = ' || ';
+        }
+        Code = (append '(!(' Code '))');
+        i = Code;
+    }
+
+    generate Operation_Colon
+    {
+        comment `a class-qualified call; Runtime maps onto the Gal helper
+        class, whose ported methods are added as they are needed; other
+        class methods resolve reflectively`;
+        i Java_Reflection_Runtime;
+        string CN [my Class Java];
+        string MN [my Method Java];
+        if (CN s= 'Runtime')
+        {
+            if (MN s= 'Chr')
+            {
+                i Java_Helper (append 'static String Chr(int n) {' [line]
+                    [indent] 'return java.lang.String.valueOf((char) n);' [line] '}');
+                CN = 'galrt';
+            }
+            else
+            {
+                error 'java generator: runtime method not ported: ' MN;
+            }
+        }
+        string Args (i Java_Args ', ');
+        string Code (append 'galrt.call_static(' (i Java_Class_Ref CN) '.class, "' MN '"');
+        if (Args sgt '')
+        {
+            append Code ', ' Args;
+        }
+        append Code ')';
+        i = Code;
+    }
+
+    generate Statement_Colon
+    {
+        i Java_Reflection_Runtime;
+        string CN [my Class_Name Java];
+        string MN [my Method_Name Java];
+        if (CN s= 'Runtime')
+        {
+            if (MN s= 'Chr')
+            {
+                i Java_Helper (append 'static String Chr(int n) {' [line]
+                    [indent] 'return java.lang.String.valueOf((char) n);' [line] '}');
+                CN = 'galrt';
+            }
+            else
+            {
+                error 'java generator: runtime method not ported: ' MN;
+            }
+        }
+        string Args (i Java_Args ', ');
+        string Code (append 'galrt.call_static(' (i Java_Class_Ref CN) '.class, "' MN '"');
+        if (Args sgt '')
+        {
+            append Code ', ' Args;
+        }
+        append Code ');';
+        i = Code;
+    }
+
+    generate Syntax
+    {
+        comment `an unported syntax element must fail the compile loudly:
+        the Element catch-all's empty string otherwise leaks holes like
+        'String X = ;' into the output`;
+        error 'no java generator for syntax ' [class name];
+    }
+
+    generate Syntax_Colon
+        (i Java_Arguments '.');
+
+    generate Syntax_Property
+    {
+        comment `a property chain: a class-name head accesses a static
+        field directly (mangled); a variable head is not statically known,
+        so later links resolve reflectively`;
+        i Java_Reflection_Runtime;
+        i Java_Build_Registry;
+        string Code '';
+        flag First [true];
+        flag Static_Link [false];
+        object Arg;
+        for each Arg in [my Arguments]
+        {
+            if First
+            {
+                Code = [Arg.Java];
+                flag Is_Local [false];
+                forgive
+                {
+                    object ML (i Java_Owner_Method);
+                    if ([ML.Java_Locals] dexists Code)
+                    {
+                        Is_Local = [true];
+                    }
+                }
+                if (not Is_Local)
+                {
+                    if ([my Java_Classes] dexists Code)
+                    {
+                        Code = (i Java_Class_Ref Code);
+                        Static_Link = [true];
+                    }
+                }
+                First = [false];
+            }
+            else
+            {
+                my Java_Set_Object = Code;
+                my Java_Set_Name = [Arg.Java];
+                if Static_Link
+                {
+                    Code = (append Code '.' [Arg.Java]);
+                    Static_Link = [false];
+                }
+                else
+                {
+                    Code = (append 'galrt.get(' Code ', "' [Arg.Java] '")');
+                }
+            }
+        }
+        i = Code;
+    }
+
+    generate Syntax_Our
+    {
+        string Cls (i Java_Owner_Class_Name);
+        if (Cls seq '')
+        {
+            error 'java generator: our outside a class';
+        }
+        i = (append (i Java_Class_Ref Cls) '.' (i Java_Arguments '.'));
+    }
+
+    generate Syntax_List
+        Variable;
+
+    generate Syntax_Dictionary
+        Variable;
+
+    generate Syntax_Is
+        (i Java_Class_Ref [my Class_Name Java]);
+
+    generate Syntax_My_Class
+        'this.getClass()';
+
+    generate Syntax_Class_Name
+    {
+        string Object_Code 'this';
+        if (defined [my Object])
+        {
+            Object_Code = [my Object Java];
+        }
+        i = (append Object_Code '.getClass().getSimpleName()');
+    }
+
+    generate Syntax_Return
+    {
+        comment `the unquoted text must hold the real carriage return
+        character, like line and tab do; gal literals never process
+        escapes, so the two-character form poisons appends`;
+        my Unquoted = (Runtime:Chr 13);
+        string Code '"\r"';
+        defined [my Count]
+        {
+            Code = (append '"\r".repeat(' [my Count Java] ')');
+            my Unquoted = [null];
+        }
+        i = Code;
+    }
+}
+
+class Java_Compiler is Fallback_Compiler
+{
+    constructor
+    {
+        my Generator = (new Java_Generator [self]);
+    }
+    method void Print_Errors
+    {
+        object E;
+        for each E in [my Elements]
+        {
+            if (not ([E.Error] is null))
+            {
+                say [line]
+                    [class name [E.Classification]]
+                    ': '
+                    (substring (E.Get_Input) 0 80);
+                say 'ERROR: ' [E.Error];
+            }
+        }
+    }
+    method number Infer_Code
+    {
+        verbosity;
+        [my Generator Elements] = [my Elements];
+        number Status = ([my Generator].Infer_Gal);
+        if (not Status)
+        {
+            i Print_Errors;
+            say 'Error in Java inference, inferring gal';
+            return 0;
+        }
+        Status = ([my Generator].Infer_Fallback);
+        if (not Status)
+        {
+            i Print_Errors;
+            say 'Error in Java inference, inferring fallback';
+            return 0;
+        }
+        Status = ([my Generator].Infer_Java);
+        if (not Status)
+        {
+            comment `a subset backend fails loudly: a generator error on any
+            element must fail the compile, not leak None into the output`;
+            i Print_Errors;
+            say 'Error in Java inference, inferring java';
+            return 0;
+        }
+        object Top = (llast [my Elements]);
+        try
+        {
+            if ([Top.Java] is null)
+            {
+                Top.Infer_Java;
+            }
+        }
+        catch Error
+        {
+            say 'Error in Java inference: ' Error;
+            return 0;
+        }
+        my Java = [Top.Java];
+        return 1;
+    }
+}

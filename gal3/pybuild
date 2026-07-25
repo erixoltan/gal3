@@ -1,0 +1,57 @@
+#!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Fast rebuild of just the pylex artifact via gal2 (regenerates zero.txt from
+# sources so dialect changes are picked up). Mirrors the compile() steps in ./build.
+
+source "$(dirname "$(readlink -f "$0")")/../galenv" || exit 1
+
+BUILD="${GAL_BUILD:-$GAL_HOME/gal3build}"
+BIN="$HOME/.gal3"
+mkdir -p "$BUILD" "$BIN"
+
+cp compiler_base.txt compiler_dialect.txt attributes_inference.txt structure_inference.txt data_type_inference.txt inheritance_inference.txt llm_inference.txt py_base.txt py_main.txt "$BUILD"/ || exit 1
+
+function gal2
+{
+    rm -f "$3"
+    echo "        gal2 $2 '-->' $1 $3"
+    python ~/.goalspell/goalspell gs $1 "$2" "$3"
+    if [ ! -f "$3" ]
+    then
+        echo "did not create $3. aborting"
+        exit 1
+    fi
+}
+
+echo "">"$BUILD/zero.txt"
+cat "$BUILD/compiler_base.txt" "$BUILD/compiler_dialect.txt" "$BUILD/attributes_inference.txt" "$BUILD/structure_inference.txt" "$BUILD/data_type_inference.txt" "$BUILD/inheritance_inference.txt" "$BUILD/llm_inference.txt" >> "$BUILD/zero.txt"
+
+echo "">"$BUILD/pylex.txt"
+cat "$BUILD/zero.txt" "$BUILD/py_base.txt" "$BUILD/py_main.txt" >> "$BUILD/pylex.txt"
+
+echo "module Compiler {">"$BUILD/pylex.tx2"
+cat "$BUILD/pylex.txt">>"$BUILD/pylex.tx2"
+echo "}">>"$BUILD/pylex.tx2"
+gal2 gs "$BUILD/pylex.tx2" "$BUILD/pylex.gal"
+
+FALLBACK="$BUILD/pylex.fallback"
+cp "$BUILD/pylex.gal" "$FALLBACK"
+rm -f "$BUILD"/pylex.fb* &> /dev/null
+for (( COUNTER=0; COUNTER<5; COUNTER++)); do
+    TEMP="$BUILD/pylex.fb$COUNTER"
+    gal2 fb "$FALLBACK" "$TEMP"
+    if [ ! -f "$TEMP" ]; then
+        echo "    no file $TEMP!"
+        break
+    fi
+    if cmp -s "$FALLBACK" "$TEMP"; then
+        echo "    files are equal!"
+        break
+    fi
+    FALLBACK="$TEMP"
+done
+cp "$FALLBACK" "$BUILD/pylex.atomic"
+
+gal2 py "$BUILD/pylex.atomic" "$BUILD/pylex.py"
+cp "$BUILD/pylex.py" "$BIN/pylex.py"
+echo "pylex build complete: $BIN/pylex.py"

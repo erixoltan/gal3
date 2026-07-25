@@ -1,0 +1,440 @@
+flowerbox 'c inference: a proof-of-concept c generator driven by the data type inference';
+
+comment `
+The smallest c backend that proves the data type inference does its job,
+per docs/data_type_inference.md. c is the strongly typed extreme of the
+three targets: declarations need real types, printf needs a format
+character per argument, and a string operand in a numeric operation needs
+an explicit atoi or atof. every one of those decisions reads the
+Data_Type and Usage properties the inference filled in.
+
+say builds its printf format string from each argument's definitional
+type: %d for integers and flags, %g for numbers, %s for strings, with
+literal segments escaped straight into the format. append becomes a
+sprintf onto the end of the buffer. a string-typed operand inside a
+numeric operation converts with atoi when the surrounding usage is
+integer, atof otherwise - the same rule the python and javascript
+generators apply with int, float and Number.
+
+this generator covers main-only programs with scalar declarations,
+say, append, if, and the arithmetic and comparison operations. anything
+else fails loudly rather than emitting broken c.
+`;
+
+class set Element
+{
+    property string C;
+    property string C_Statements '';
+
+    method string C_Arg_Data_Type [object Arg]
+    {
+        forgive
+        {
+            object AC [Arg.Classification];
+            string T [AC.Data_Type];
+            return '' if (T is an Element);
+            return T;
+        }
+        return '';
+    }
+
+    method string C_Escape_Format [string Text]
+    {
+        comment `literal text placed inside a printf format string: format
+        and string escapes both apply`;
+        if (Text contains '\')
+        {
+            replace Text '\' '\\';
+        }
+        if (Text contains '%')
+        {
+            replace Text '%' '%%';
+        }
+        if (Text contains '"')
+        {
+            replace Text '"' '\"';
+        }
+        if (Text contains [tab])
+        {
+            replace Text [tab] '\t';
+        }
+        if (Text contains [line])
+        {
+            replace Text [line] '\n';
+        }
+        return Text;
+    }
+
+    method string C_Quote [string Text]
+    {
+        return (append '"' (i C_Escape_Format Text) '"');
+    }
+
+    method string C_Format_Args [list Args, flag Newline]
+    {
+        comment `the printf pattern: literal arguments escape into the
+        format string, typed arguments contribute a format character
+        chosen by their definitional type and join the argument list`;
+        string Fmt '';
+        string Rest '';
+        object Arg;
+        for each Arg in Args
+        {
+            object AC [Arg.Classification];
+            string U '<none>';
+            forgive
+            {
+                string U2 [AC.Unquoted];
+                if (not (U2 is an Element))
+                {
+                    U = U2;
+                }
+            }
+            if (U sne '<none>')
+            {
+                append Fmt (i C_Escape_Format U);
+                continue;
+            }
+            string DT (i C_Arg_Data_Type Arg);
+            string F '%g';
+            if (DT s= 'integer')
+            {
+                F = '%d';
+            }
+            else if (DT s= 'flag')
+            {
+                F = '%d';
+            }
+            else if (DT s= 'string')
+            {
+                F = '%s';
+            }
+            else if (DT s= 'number')
+            {
+                F = '%g';
+            }
+            else
+            {
+                error 'c generator: untyped say or append argument: ' (Arg.Get_Input);
+            }
+            append Fmt F;
+            append Rest ', ' [Arg.C];
+        }
+        if Newline
+        {
+            append Fmt '\n';
+        }
+        return (append '"' Fmt '"' Rest);
+    }
+}
+
+class set Statement
+{
+    method string C_Block
+    {
+        forgive
+        {
+            if (not ([my Block C] is null))
+            {
+                return [my Block C];
+            }
+        }
+        return (append [line] '{' [line] '}');
+    }
+}
+
+class set Operation
+{
+    method string C_Numeric_Operand [object Op]
+    {
+        comment `c must convert a string-typed operand explicitly: atoi
+        when the surrounding usage is integer, atof otherwise`;
+        string Code [Op.C];
+        if ((i C_Arg_Data_Type Op) s= 'string')
+        {
+            string Conv 'atof';
+            if ([my Usage] s= 'integer')
+            {
+                Conv = 'atoi';
+            }
+            Code = (append Conv '(' Code ')');
+        }
+        return Code;
+    }
+
+    method string C_Numeric_Infix [object Op1, object Op2, string Infix]
+    {
+        return (append '(' (i C_Numeric_Operand Op1) Infix (i C_Numeric_Operand Op2) ')');
+    }
+
+    method string C_Infix [object Op1, object Op2, string Infix]
+    {
+        return (append '(' [Op1.C] Infix [Op2.C] ')');
+    }
+}
+
+generator C Fallback
+{
+    english 'generate c code for each language element, using the inferred data types.';
+
+    generate Element
+    {
+        comment `syntaxes with unquoted text are consumed by the format
+        builders and never emit c of their own; anything else that lands
+        here is caught by the statement and operation defaults below`;
+        i = '';
+    }
+
+    generate Statement
+    {
+        error 'no c generator for statement ' [class name];
+    }
+
+    generate Operation
+    {
+        error 'no c generator for operation ' [class name];
+    }
+
+    generate Token
+    {
+        i = [my Text];
+    }
+
+    generate Token_Quote
+    {
+        i = (i C_Quote [my Unquoted]);
+    }
+
+    generate Syntax_True
+    {
+        i = '1';
+    }
+
+    generate Syntax_False
+    {
+        i = '0';
+    }
+
+    generate Program
+    {
+        string Code '#include <stdio.h>' [line]
+            '#include <stdlib.h>' [line]
+            '#include <string.h>' [line]
+            [line];
+        object Stmt;
+        for each Stmt in [my Statements]
+        {
+            undefined [Stmt.C]
+            {
+                Stmt.Infer_C;
+            }
+            string S [Stmt.C];
+            if (S sgt '')
+            {
+                append Code S [line];
+            }
+        }
+        i = Code;
+    }
+
+    generate Block
+    {
+        string Statements '';
+        object Line;
+        for each Line in [my Statements]
+        {
+            string S [Line.C];
+            if (S sgt '')
+            {
+                append Statements S [line];
+            }
+        }
+        my C_Statements = Statements;
+        string Code (append [line] '{' [line] (i Indent Statements) '}');
+        i = Code;
+    }
+
+    generate Statement_Comment
+    {
+        i = '';
+    }
+
+    generate Statement_Flowerbox
+    {
+        i = '';
+    }
+
+    generate Statement_Module
+    {
+        string Code '// module: ' [my Name C] [line];
+        object Stmt;
+        for each Stmt in [my Block Statements]
+        {
+            string S [Stmt.C];
+            if (S sgt '')
+            {
+                append Code S [line];
+            }
+        }
+        i = Code;
+    }
+
+    generate Statement_Main
+    {
+        string Body '';
+        forgive
+        {
+            Body = [my Block C_Statements];
+        }
+        append Body 'return 0;' [line];
+        string Code 'int main(int argc, char **argv)' [line]
+            '{' [line]
+            (i Indent Body)
+            '}';
+        i = Code;
+    }
+
+    generate Statement_Integer
+    {
+        string Value '0';
+        forgive
+        {
+            if (not ([my Value] is null))
+            {
+                Value = [my Value C];
+            }
+        }
+        i = (append 'int ' [my Name C] ' = ' Value ';');
+    }
+
+    generate Statement_Number
+    {
+        string Value '0';
+        forgive
+        {
+            if (not ([my Value] is null))
+            {
+                Value = [my Value C];
+            }
+        }
+        i = (append 'double ' [my Name C] ' = ' Value ';');
+    }
+
+    generate Statement_Flag
+    {
+        string Value '0';
+        forgive
+        {
+            if (not ([my Value] is null))
+            {
+                Value = [my Value C];
+            }
+        }
+        i = (append 'int ' [my Name C] ' = ' Value ';');
+    }
+
+    generate Statement_String
+    {
+        comment `proof of concept: strings are fixed buffers, large enough
+        for the demo and appendable in place with sprintf. the string
+        declaration carries its initial value in the leftover arguments,
+        unlike the numeric declarations.`;
+        string Value '""';
+        forgive
+        {
+            if ((llength [my Listargs]) > 0)
+            {
+                object V (lget [my Listargs] 0);
+                Value = [V.C];
+            }
+        }
+        i = (append 'char ' [my Name C] '[256] = ' Value ';');
+    }
+
+    generate Statement_Say
+    {
+        i = (append 'printf(' (i C_Format_Args [my Arguments] [true]) ');');
+    }
+
+    generate Statement_Append
+    {
+        string V [my Variable C];
+        string Code 'sprintf(' V ' + strlen(' V '), ' (i C_Format_Args [my Listargs] [false]) ');';
+        i = Code;
+    }
+
+    generate Statement_If
+    {
+        i = (append 'if (' [my Condition C] ')' (i C_Block));
+    }
+
+    generate Operation_Add
+        (i C_Numeric_Infix [my Op1] [my Op2] ' + ');
+    generate Operation_Minus
+        (i C_Numeric_Infix [my Op1] [my Op2] ' - ');
+    generate Operation_Multiply
+        (i C_Numeric_Infix [my Op1] [my Op2] ' * ');
+    generate Operation_Divide
+        (i C_Numeric_Infix [my Op1] [my Op2] ' / ');
+    generate Operation_Modulo
+        (i C_Numeric_Infix [my Op1] [my Op2] ' % ');
+    generate Operation_Greater
+        (i C_Infix [my Op1] [my Op2] ' > ');
+    generate Operation_Less
+        (i C_Infix [my Op1] [my Op2] ' < ');
+    generate Operation_Greater_Equal
+        (i C_Infix [my Op1] [my Op2] ' >= ');
+    generate Operation_Less_Equal
+        (i C_Infix [my Op1] [my Op2] ' <= ');
+    generate Operation_Equal
+        (i C_Infix [my Op1] [my Op2] ' == ');
+    generate Operation_Not_Equal
+        (i C_Infix [my Op1] [my Op2] ' != ');
+    generate Operation_And
+        (i C_Infix [my Op1] [my Op2] ' && ');
+    generate Operation_Or
+        (i C_Infix [my Op1] [my Op2] ' || ');
+    generate Operation_Not
+        '(!' [my Op1 C] ')';
+}
+
+class C_Compiler is Fallback_Compiler
+{
+    constructor
+    {
+        my Generator = (new C_Generator [self]);
+    }
+    method number Infer_Code
+    {
+        verbosity;
+        [my Generator Elements] = [my Elements];
+        number Status = ([my Generator].Infer_Gal);
+        if (not Status)
+        {
+            say 'Error in C inference, inferring gal';
+            return 0;
+        }
+        Status = ([my Generator].Infer_Fallback);
+        if (not Status)
+        {
+            say 'Error in C inference, inferring fallback';
+            return 0;
+        }
+        [my Generator].Infer_C;
+        object Top = (llast [my Elements]);
+        try
+        {
+            if ([Top.C] is null)
+            {
+                Top.Infer_C;
+            }
+        }
+        catch Error
+        {
+            say 'Error in C inference: ' Error;
+            return 0;
+        }
+        my C = [Top.C];
+        return 1;
+    }
+}

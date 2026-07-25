@@ -1,0 +1,22 @@
+flowerbox 'gal to c main';
+main [string Source_File, string Target_File]
+{
+    verbosity;
+    verbose 'gal c compiler';
+    verbose 'input file: ' Source_File;
+    string Report_File Target_File '.elems';
+    object CC = (new C_Compiler);
+    CC.Initialize;
+    CC.File_Name = Source_File;
+    CC.Code = '<undefined>';
+    number Status = (CC.Infer);
+    if (Status = 0)
+    {
+        say 'Error inferring c code';
+        write (CC.Element_Report) to Report_File;
+    }
+    else
+    {
+        write [CC.C] to Target_File;
+    }
+}

@@ -1,0 +1,515 @@
+flowerbox 'peg metagrammar parser: token classes, parser Peg, element classes, Peg_Compiler';
+
+comment `
+Tokenizer for pegen-style .gram files (CPython Grammar/python.gram).
+Follows the Gal_Compiler pattern: a Factory classifies the first character,
+then Append_Character absorbs following characters one at a time.
+Actions { ... } and strings are opaque blobs (string-aware, escape-aware).
+Newlines are significant tokens (rules are line-oriented); runs of newlines
+are collapsed to one by Peg_Compiler.Infer_Tokens. Spaces and comments are trivia.
+`;
+
+class Peg_Token is Token
+{
+    class method object Factory [object Char]
+    {
+        object Tok;
+        string C [Char.Text];
+        if (C s= '#')
+        {
+            Tok = (new Peg_Comment);
+        }
+        else if (C s= '{')
+        {
+            Tok = (new Peg_Action);
+        }
+        else if (Char is a Char_Quote)
+        {
+            flag Triple [false];
+            forgive
+            {
+                if (([Char.Next Text] s= C) and ([Char.Next Next Text] s= C))
+                {
+                    Triple = [true];
+                }
+            }
+            if Triple
+            {
+                Tok = (new Peg_Triple_String);
+                Tok.Quote_Char = C;
+            }
+            else
+            {
+                Tok = (new Peg_String);
+                Tok.Quote_Char = C;
+            }
+        }
+        else if ((Char is a Char_Ident) or (Char is a Char_Number))
+        {
+            Tok = (new Peg_Name);
+        }
+        else if (Char is a Char_Line)
+        {
+            Tok = (new Token_Line);
+        }
+        else if (Char is a Char_Ws)
+        {
+            Tok = (new Peg_Ws);
+        }
+        else
+        {
+            Tok = (new Peg_Op);
+        }
+        Tok.Text = C;
+        Tok.Start_Position = [Char.Start_Position];
+        Tok.End_Position = [Char.End_Position];
+        return Tok;
+    }
+}
+
+class Peg_Name is Peg_Token
+{
+    method integer Append_Character [object Char]
+    {
+        if ((Char is a Char_Ident) or (Char is a Char_Number))
+        {
+            push [my Elements] Char;
+            append [my Text] [Char.Text];
+            my End_Position = [Char.End_Position];
+            return 1;
+        }
+        return 0;
+    }
+}
+
+class Peg_String is Peg_Token
+{
+    property flag Open [true];
+    property flag Escaped [false];
+    property string Quote_Char;
+    property string Unquoted '';
+    method integer Append_Character [object Char]
+    {
+        return 0 if (not [my Open]);
+        push [my Elements] Char;
+        append [my Text] [Char.Text];
+        my End_Position = [Char.End_Position];
+        string C [Char.Text];
+        if [my Escaped]
+        {
+            my Escaped = [false];
+            append [my Unquoted] C;
+            return 1;
+        }
+        if (C s= '\')
+        {
+            my Escaped = [true];
+            return 1;
+        }
+        if (C s= [my Quote_Char])
+        {
+            my Open = [false];
+            return 1;
+        }
+        append [my Unquoted] C;
+        return 1;
+    }
+}
+
+class Peg_Triple_String is Peg_Token
+{
+    comment `a triple-quoted block, e.g. the @trailer value; interior is opaque`;
+    property flag Open [true];
+    property string Quote_Char;
+    property integer Opened 1;
+    property integer Run 0;
+    property string Unquoted '';
+    method integer Append_Character [object Char]
+    {
+        return 0 if (not [my Open]);
+        push [my Elements] Char;
+        append [my Text] [Char.Text];
+        my End_Position = [Char.End_Position];
+        string C [Char.Text];
+        if ([my Opened] < 3)
+        {
+            if (C s= [my Quote_Char])
+            {
+                increment [my Opened];
+            }
+            return 1;
+        }
+        if (C s= [my Quote_Char])
+        {
+            increment [my Run];
+            if ([my Run] >= 3)
+            {
+                my Open = [false];
+            }
+            return 1;
+        }
+        my Run = 0;
+        append [my Unquoted] C;
+        return 1;
+    }
+}
+
+class Peg_Action is Peg_Token
+{
+    comment `a brace-balanced opaque action blob; skips string interiors so
+    braces inside C string literals do not affect the depth count`;
+    property flag Open [true];
+    property integer Depth 1;
+    property flag In_String [false];
+    property flag Escaped [false];
+    property string String_Quote '';
+    method integer Append_Character [object Char]
+    {
+        return 0 if (not [my Open]);
+        push [my Elements] Char;
+        append [my Text] [Char.Text];
+        my End_Position = [Char.End_Position];
+        string C [Char.Text];
+        if [my Escaped]
+        {
+            my Escaped = [false];
+            return 1;
+        }
+        if [my In_String]
+        {
+            if (C s= '\')
+            {
+                my Escaped = [true];
+                return 1;
+            }
+            if (C s= [my String_Quote])
+            {
+                my In_String = [false];
+            }
+            return 1;
+        }
+        if ((C s= "'") or (C s= '"'))
+        {
+            my In_String = [true];
+            my String_Quote = C;
+            return 1;
+        }
+        if (C s= '{')
+        {
+            increment [my Depth];
+            return 1;
+        }
+        if (C s= '}')
+        {
+            my Depth = ([my Depth] - 1);
+            if ([my Depth] = 0)
+            {
+                my Open = [false];
+            }
+            return 1;
+        }
+        return 1;
+    }
+}
+
+class Peg_Comment is Peg_Token
+{
+    method integer Append_Character [object Char]
+    {
+        return 0 if (Char is a Char_Line);
+        push [my Elements] Char;
+        append [my Text] [Char.Text];
+        my End_Position = [Char.End_Position];
+        return 1;
+    }
+}
+
+class Peg_Ws is Peg_Token
+{
+    method integer Append_Character [object Char]
+    {
+        return 0 if (not (Char is a Char_Ws));
+        return 0 if (Char is a Char_Line);
+        push [my Elements] Char;
+        append [my Text] [Char.Text];
+        my End_Position = [Char.End_Position];
+        return 1;
+    }
+}
+
+class Peg_Op is Peg_Token;
+
+comment `
+The pegen metagrammar, hand-hoisted into named rules (every nonterminal is a
+named sequence or either; nested groups in the INPUT grammar are handled by
+recursion through Peg_Group / Peg_Optional_Group).
+Ordered-choice order matters: Peg_Named_Item before bare atoms (both start
+with a NAME and rely on rollback), Peg_Forced (&&) before Peg_Lookahead_Positive (&),
+Peg_Gather (a.b+) before Peg_Postfix_Item (both start with an atom).
+`;
+
+parser Peg
+{
+    tokens
+        Peg_Name
+        Peg_String
+        Peg_Triple_String
+        Peg_Action
+        Token_Line
+        ;
+    sequence Peg_Grammar
+        [repeating Peg_Item]
+        ;
+    either Peg_Item
+        Peg_Meta
+        Peg_Rule
+        Token_Line
+        ;
+    sequence Peg_Meta
+        '@'
+        Peg_Name
+        [optional Peg_Meta_Value]
+        Token_Line
+        ;
+    either Peg_Meta_Value
+        Peg_Triple_String
+        Peg_String
+        Peg_Name
+        ;
+    sequence Peg_Rule
+        Peg_Rule_Header
+        Peg_Rule_Body
+        ;
+    sequence Peg_Rule_Header
+        Peg_Name
+        [optional Peg_Annotation]
+        [optional Peg_Memo_Flag]
+        ':'
+        ;
+    sequence Peg_Annotation
+        '['
+        Peg_Name
+        [optional '*']
+        ']'
+        ;
+    sequence Peg_Memo_Flag
+        '('
+        Peg_Name
+        ')'
+        ;
+    sequence Peg_Rule_Body
+        [optional '|']
+        [optional Peg_Alt_List]
+        Token_Line
+        [optrep Peg_Alt_Line]
+        ;
+    sequence Peg_Alt_Line
+        '|'
+        Peg_Alt_List
+        Token_Line
+        ;
+    sequence Peg_Alt_List
+        Peg_Alternative
+        [optrep Peg_Alt_Tail]
+        ;
+    sequence Peg_Alt_Tail
+        '|'
+        Peg_Alternative
+        ;
+    sequence Peg_Alternative
+        [repeating Peg_Item_Term]
+        [optional Peg_Action]
+        ;
+    either Peg_Item_Term
+        Peg_Named_Item
+        Peg_Forced
+        Peg_Lookahead_Positive
+        Peg_Lookahead_Negative
+        Peg_Cut
+        Peg_Item_Value
+        ;
+    sequence Peg_Named_Item
+        Peg_Name
+        [optional Peg_Annotation]
+        '='
+        Peg_Item_Value
+        ;
+    either Peg_Item_Value
+        Peg_Gather
+        Peg_Postfix_Item
+        ;
+    sequence Peg_Gather
+        Peg_Atom
+        '.'
+        Peg_Atom
+        '+'
+        ;
+    sequence Peg_Postfix_Item
+        Peg_Atom
+        [optional Peg_Postfix_Op]
+        ;
+    either Peg_Postfix_Op
+        '?'
+        '*'
+        '+'
+        ;
+    either Peg_Atom
+        Peg_Group
+        Peg_Optional_Group
+        Peg_Triple_String
+        Peg_String
+        Peg_Name
+        ;
+    sequence Peg_Group
+        '('
+        Peg_Alt_List
+        ')'
+        ;
+    sequence Peg_Optional_Group
+        '['
+        Peg_Alt_List
+        ']'
+        ;
+    sequence Peg_Forced
+        '&'
+        '&'
+        Peg_Atom
+        ;
+    sequence Peg_Lookahead_Positive
+        '&'
+        Peg_Atom
+        ;
+    sequence Peg_Lookahead_Negative
+        '!'
+        Peg_Atom
+        ;
+    sequence Peg_Cut
+        '~'
+        ;
+}
+
+comment `element classes for the sequence rule names; either rules do not create elements`;
+
+class Peg_Element is Element
+{
+    property list Elements;
+}
+class Peg_Grammar is Peg_Element;
+class Peg_Meta is Peg_Element;
+class Peg_Rule is Peg_Element;
+class Peg_Rule_Header is Peg_Element;
+class Peg_Annotation is Peg_Element;
+class Peg_Memo_Flag is Peg_Element;
+class Peg_Rule_Body is Peg_Element;
+class Peg_Alt_Line is Peg_Element;
+class Peg_Alt_List is Peg_Element;
+class Peg_Alt_Tail is Peg_Element;
+class Peg_Alternative is Peg_Element;
+class Peg_Named_Item is Peg_Element;
+class Peg_Gather is Peg_Element;
+class Peg_Postfix_Item is Peg_Element;
+class Peg_Group is Peg_Element;
+class Peg_Optional_Group is Peg_Element;
+class Peg_Forced is Peg_Element;
+class Peg_Lookahead_Positive is Peg_Element;
+class Peg_Lookahead_Negative is Peg_Element;
+class Peg_Cut is Peg_Element;
+
+class Peg_Compiler is Compiler
+{
+    property object Parser (new Peg_Parser);
+
+    method number Infer_Tokens
+    {
+        verbosity;
+        comment `the peg lexer still walks character elements: the standard
+        pipeline no longer builds them, so make sure they exist here`;
+        return 0 if ((i Infer_Characters) = 0);
+        object Char;
+        object Current = (new Token);
+        object Last;
+        integer Status;
+        integer Group_Depth 0;
+        for each Char in [my Characters]
+        {
+            Status = (Current.Append_Character Char);
+            continue if (Status > 0);
+            Current = (Peg_Token:Factory Char);
+            if (Current is a Peg_Ws Peg_Comment)
+            {
+                continue;
+            }
+            # 'implicit line joining: newlines inside parens and brackets are insignificant, as in Python tokenizer';
+            if (Current is a Peg_Op)
+            {
+                string Op_Text [Current.Text];
+                if ((Op_Text s= '(') or (Op_Text s= '['))
+                {
+                    increment Group_Depth;
+                }
+                if ((Op_Text s= ')') or (Op_Text s= ']'))
+                {
+                    if (Group_Depth > 0)
+                    {
+                        Group_Depth = (Group_Depth - 1);
+                    }
+                }
+            }
+            if (Current is a Token_Line)
+            {
+                continue if (Group_Depth > 0);
+                continue if ((llength [my Tokens]) = 0);
+                Last = (llast [my Tokens]);
+                continue if (Last is a Token_Line);
+            }
+            push [my Tokens] Current;
+        }
+        # 'guarantee a trailing newline token so the last rule terminates';
+        if ((llength [my Tokens]) > 0)
+        {
+            Last = (llast [my Tokens]);
+            if (not (Last is a Token_Line))
+            {
+                object Final (new Token_Line);
+                Final.Text = [line];
+                Final.Start_Position = ([Last.End_Position] + 1);
+                Final.End_Position = ([Last.End_Position] + 1);
+                push [my Tokens] Final;
+            }
+        }
+        return 1;
+    }
+
+    method number Infer_Elements
+    {
+        verbosity;
+        list Elems;
+        object P = [my Parser];
+        P.Text = [my Text];
+        P.Tokens = [my Tokens];
+        number Status = (P.Parse_Peg_Grammar Elems);
+        my Elements = [P.Elements];
+        i Derive_Elements;
+        integer Consumed [P.Token_Pos];
+        integer Total (llength [my Tokens]);
+        if (Consumed < Total)
+        {
+            string Msg 'PARTIAL PARSE: consumed ';
+            append Msg (string Consumed) ' of ' (string Total) ' tokens.';
+            say Msg;
+            object Tok (lget [my Tokens] Consumed);
+            say (Tok.To_String);
+            return 0;
+        }
+        return Status;
+    }
+
+    method number Parse_Grammar
+    {
+        return 0 if ((i Infer_Text) = 0);
+        return 0 if ((i Infer_Characters) = 0);
+        return 0 if ((i Infer_Tokens) = 0);
+        return 0 if ((i Infer_Elements) = 0);
+        return 1;
+    }
+}

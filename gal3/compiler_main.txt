@@ -1,0 +1,15 @@
+flowerbox 'compiler main';
+flowerbox 'the zero compiler.
+everything the compiler does at a completely abstract level.';
+main [string FN]
+{
+    verbosity [true];
+    object C new Compiler;
+    C.File_Name = FN;
+    verbose 'file name: ' FN;
+    C.Infer;
+    verbose 'text: ' [C.Text];
+    verbose 'code: ' [C.Code];
+    [C.Dialect].Print_Unclassified_Verbs;
+}
+

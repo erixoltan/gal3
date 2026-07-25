@@ -1,0 +1,97 @@
+flowerbox `web main: the whole gal3 pipeline as one browser-callable entry.
+compiled in browser mode, main becomes globalThis.Gal_Main(Stage, Source_File,
+Target_File); pages exchange file content through the Gal_Files virtual file
+system. under node the same bundle runs from the command line against the
+real file system, so the two editions are testable against each other`;
+main [string Stage, string Source_File, string Target_File]
+{
+    verbosity;
+    verbose 'gal3 web bundle, stage: ' Stage;
+    if (Stage s= 'gal')
+    {
+        object GC = (new Gal_Compiler);
+        GC.Initialize;
+        GC.File_Name = Source_File;
+        GC.Code = '<undefined>';
+        number Gr = (GC.Infer);
+        if (Gr > 0)
+        {
+            write [GC.Gal] to Target_File;
+        }
+        else
+        {
+            say 'gal stage error, output not written';
+        }
+    }
+    else if (Stage s= 'fallback')
+    {
+        object FC = (new Fallback_Compiler);
+        FC.Initialize;
+        FC.File_Name = Source_File;
+        FC.Code = '<undefined>';
+        number Fr = (FC.Infer);
+        if (Fr > 0)
+        {
+            write [FC.Fallback] to Target_File;
+        }
+        else
+        {
+            say 'fallback stage error, output not written';
+        }
+    }
+    else if (Stage s= 'python')
+    {
+        object PC = (new Python_Compiler);
+        PC.Initialize;
+        PC.File_Name = Source_File;
+        PC.Code = '<undefined>';
+        number Pr = (PC.Infer);
+        if (Pr > 0)
+        {
+            write [PC.Python] to Target_File;
+        }
+        else
+        {
+            say 'python stage error, output not written';
+        }
+    }
+    else if (Stage s= 'javascript')
+    {
+        comment `the browser stage below raises the process-global flag;
+        put it back so this stage always emits node-flavored code`;
+        Javascript_Browser_Compiler.Browser_Mode = [false];
+        object JC = (new Javascript_Compiler);
+        JC.Initialize;
+        JC.File_Name = Source_File;
+        JC.Code = '<undefined>';
+        number Jr = (JC.Infer);
+        if (Jr > 0)
+        {
+            write [JC.Javascript] to Target_File;
+        }
+        else
+        {
+            say 'javascript stage error, output not written';
+        }
+    }
+    else if (Stage s= 'browser')
+    {
+        object BC = (new Javascript_Browser_Compiler);
+        BC.Initialize;
+        BC.File_Name = Source_File;
+        BC.Code = '<undefined>';
+        number Br = (BC.Infer);
+        if (Br > 0)
+        {
+            write [BC.Javascript] to Target_File;
+        }
+        else
+        {
+            say 'browser stage error, output not written';
+        }
+    }
+    else
+    {
+        say 'unknown stage ' Stage '; use gal, fallback, python, javascript or browser';
+    }
+}

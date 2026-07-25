@@ -1,0 +1,228 @@
+
+comment 'structure inference starts here';
+
+class append Element
+{
+    method void Next_Element [object Next]
+    {
+        comment 'connect ifs to elses, etc.';
+    }
+    method object Get_Innermost_Class
+    {
+        if (defined [my Parent])
+        {
+            return ([my Parent].Get_Innermost_Class);
+        }
+        return [null];
+    }
+    method object Get_Variable_Context
+    {
+        if (defined [my Parent])
+        {
+            return ([my Parent].Get_Variable_Context);
+        }
+        return [null];
+    }
+}
+class append If_Statement
+{
+    property object Next_Else [null];
+    method void Next_Element [object Next]
+    {
+        comment 'connect if to else.';
+        my Next_Else = Next;
+    }
+}
+class append Try_Statement
+{
+    property object Next_Catch [null];
+    method void Next_Element [object Next]
+    {
+        comment 'connect try to catch.';
+        my Next_Catch = Next;
+    }
+}
+
+class append Class_Statement
+{
+    property dictionary Variables;
+    method object Get_Innermost_Class
+    {
+        return [me];
+    }
+    method object Get_Variable_Context
+    {
+        return [me];
+    }
+}
+class append Method_Statement
+{
+    property dictionary Variables;
+    method object Get_Variable_Context
+    {
+        return [me];
+    }
+}
+class append Function_Statement
+{
+    property dictionary Variables;
+    method object Get_Variable_Context
+    {
+        return [me];
+    }
+}
+
+inference Structure
+{
+    handle Compiler
+    {
+        verbosity;
+        verbose [class name] ' begins inferring structure';
+        objects Elem CurrentElem;
+        flag Status [true];
+
+        comment Print the language elements for analysis;
+        verbose "Analyzing elements for structure inference...";
+        integer ElementCount = (llength [my Elements]);
+        verbose "Found " ElementCount " elements to process";
+
+        comment 'First pass: establish direct parent-child relationships';
+        comment 'Working from right to left (end to beginning) to ensure all';
+        comment 'component elements are processed before their owners';
+        integer N;
+
+        integer L = (ElementCount - 1);
+        verbose "Processing elements in reverse order (index " L " to 0)";
+
+        for N range L 0 -1
+        {
+            CurrentElem = (lget [my Elements] N);
+            undefined [CurrentElem.Dialect]
+            {
+                CurrentElem.Dialect = [my Dialect];
+            }
+            CurrentElem.Infer_Structure;
+            forgive
+            {
+                [CurrentElem.Classification Parent] = [CurrentElem.Parent Classification];
+            }
+            [CurrentElem.Classification].Infer_Structure;
+        }
+
+        verbose [class name] ' completed inferring structure';
+        return Status;
+    }
+
+    handle Element;
+    handle Token;
+    handle Spell
+    {
+        object Arg;
+        for each Arg in [my Arguments]
+        {
+            Arg.Parent = [me];
+            undefined [Arg.Dialect]
+            {
+                Arg.Dialect = [my Dialect];
+            }
+        }
+    }
+    handle Statement
+    {
+        try
+        {
+            [my Block Parent] = [me];
+        }
+        catch
+        {
+            [my Block] = (new Block);
+            [my Block Parent] = [me];
+        }
+        undefined [my Block Dialect]
+        {
+            [my Block Dialect] = [my Dialect];
+        }
+        object Elem;
+        for each Elem in [my Arguments]
+        {
+            undefined [Elem.Dialect]
+            {
+                Elem.Dialect = [my Dialect];
+            }
+            Elem.Parent = [me];
+        }
+        object Prev = [null];
+        for each Elem in [my Block Statements]
+        {
+            Elem.Parent = [me];
+            undefined [Elem.Dialect]
+            {
+                Elem.Dialect = [my Dialect];
+            }
+            if Prev
+            {
+                comment `connect ifs to elses, etc. — on the
+                classifications, where Next_Else is consumed; the
+                element-level call stays for compatibility`;
+                Prev.Next_Element Elem;
+                forgive
+                {
+                    [Prev.Classification].Next_Element [Elem.Classification];
+                }
+            }
+            Prev = Elem;
+        }
+    }
+    handle Class_Statement
+    {
+        try
+        {
+            [my Block Parent] = [me];
+        }
+        catch
+        {
+            [my Block] = (new Block);
+            [my Block Parent] = [me];
+        }
+        undefined [my Block Dialect]
+        {
+            [my Block Dialect] = [my Dialect];
+        }
+        object Elem;
+        for each Elem in [my Arguments]
+        {
+            undefined [Elem.Dialect]
+            {
+                Elem.Dialect = [my Dialect];
+            }
+            Elem.Parent = [me];
+        }
+        object Prev = [null];
+        for each Elem in [my Block Statements]
+        {
+            Elem.Parent = [me];
+            undefined [Elem.Dialect]
+            {
+                Elem.Dialect = [my Dialect];
+            }
+            if Prev
+            {
+                comment `connect ifs to elses, etc. — on the
+                classifications, where Next_Else is consumed; the
+                element-level call stays for compatibility`;
+                Prev.Next_Element Elem;
+                forgive
+                {
+                    [Prev.Classification].Next_Element [Elem.Classification];
+                }
+            }
+            Prev = Elem;
+            if ([Elem.Classification] is a Property_Statement)
+            {
+                my Generate_Constructor = [true];
+            }
+        }
+    }
+}
+
+comment 'structure inference ends here';

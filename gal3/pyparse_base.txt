@@ -1,0 +1,60 @@
+flowerbox 'python parser support: element bases, NAME keyword exclusion, driver compiler';
+
+comment `
+Support layer for the generated parser Python (python_parser.txt).
+Py_Rule is the element base for real grammar rules, Py_Synth for the
+synthetic rules created by rule lifting - kept as a separate base so later
+inferences can treat hoisted elements as pass-through per the design doc.
+The Parse_Py_Name keyword exclusion and the lookahead methods live inside
+the generated parser block itself, because class set cannot target a class
+that only exists in generated output.
+`;
+
+class Py_Rule is Element
+{
+    property list Elements;
+}
+class Py_Synth is Py_Rule;
+
+class Py_Type_Comment is Py_Token;
+
+class Py_Parse_Compiler is Py_Compiler
+{
+    property object Parser (new Python_Parser);
+
+    method number Infer_Elements
+    {
+        verbosity;
+        list Elems;
+        object P = [my Parser];
+        P.Text = [my Text];
+        P.Tokens = [my Tokens];
+        number Status = (P.Parse_Python_file Elems);
+        my Elements = [P.Elements];
+        i Derive_Elements;
+        integer Consumed [P.Token_Pos];
+        integer Total (llength [my Tokens]);
+        if (Consumed < Total)
+        {
+            string Msg 'PARTIAL PARSE: consumed ';
+            append Msg (string Consumed) ' of ' (string Total) ' tokens, high water ' (string [P.High_Water]) '.';
+            say Msg;
+            integer HW [P.High_Water];
+            if (HW >= Total)
+            {
+                HW = (Total - 1);
+            }
+            object Tok (lget [my Tokens] HW);
+            say (Tok.To_String);
+            return 0;
+        }
+        return Status;
+    }
+
+    method number Parse_Python
+    {
+        return 0 if ((i Tokenize) = 0);
+        return 0 if ((i Infer_Elements) = 0);
+        return 1;
+    }
+}

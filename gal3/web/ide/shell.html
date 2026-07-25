@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>gal ide</title>
+<style>
+__CSS__
+</style>
+</head>
+<body>
+
+<header id="toolbar">
+  <button id="menu-btn" class="icon-btn" aria-label="menu" aria-expanded="false">&#9776;</button>
+  <span id="filename" class="mono" title="current file">untitled.gal</span>
+  <span class="spacer"></span>
+  <label class="sr-only" for="target">output language</label>
+  <select id="target" title="output language">
+    <option value="python">python</option>
+    <option value="javascript" selected>javascript</option>
+    <option value="browser">browser js</option>
+  </select>
+  <button id="compile" class="act">compile</button>
+  <button id="run" class="act run" disabled>run</button>
+  <button id="stop" class="act stop" hidden>stop</button>
+  <button id="out-toggle" class="icon-btn" aria-label="toggle output panel" title="toggle output panel">&#9707;</button>
+</header>
+
+<nav id="drawer" hidden>
+  <button class="drawer-item" id="m-new">new</button>
+  <button class="drawer-item" id="m-open">open&#8230;</button>
+  <button class="drawer-item" id="m-save">save</button>
+  <button class="drawer-item" id="m-saveas">save as&#8230;</button>
+  <div class="drawer-sep"></div>
+  <button class="drawer-item" id="m-signin">sign in&#8230;</button>
+  <button class="drawer-item" id="m-signout" hidden>sign out</button>
+  <div class="drawer-sep"></div>
+  <div class="drawer-note" id="drawer-status">gal ide 3.1.1<br>the compiler runs in this page.<br><span class="mono">ctrl+enter</span> compile &#183; <span class="mono">ctrl+s</span> save</div>
+</nav>
+<div id="modal-scrim" hidden></div>
+<div id="modal" role="dialog" aria-modal="true" hidden></div>
+<div id="scrim" hidden></div>
+
+<main id="split">
+  <section id="editor-panel">
+    <div id="editor-host">
+      <div id="source-host"></div>
+      <div id="stage-host" hidden></div>
+    </div>
+    <nav id="stage-tabs" aria-label="pipeline stages">
+      <button class="stage-tab mono" data-stage="source" data-on="1">source</button>
+      <button class="stage-tab mono" data-stage="gal" disabled>gal</button>
+      <button class="stage-tab mono" data-stage="atomic" disabled>atomic</button>
+      <button class="stage-tab mono" data-stage="target" disabled id="target-tab">javascript</button>
+    </nav>
+  </section>
+  <section id="output-panel">
+    <div id="output-head">
+      <span class="mono" id="output-title">output</span>
+      <span class="spacer"></span>
+      <button id="out-close" class="icon-btn" aria-label="hide output">&#215;</button>
+    </div>
+    <pre id="output" class="mono"></pre>
+  </section>
+</main>
+
+<script>
+__CM_BUNDLE__
+</script>
+<script type="text/plain" id="worker-src">
+__WORKER_SRC__
+</script>
+<script>
+__IDE_JS__
+</script>
+</body>
+</html>

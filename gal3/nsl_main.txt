@@ -1,0 +1,14 @@
+flowerbox 'nsl main';
+main [string File_Name]
+{
+    verbosity;
+    verbose 'nsl compiler';
+    verbose 'input file: ' File_Name;
+    object C = (new Nsl_Compiler);
+    C.Initialize;
+    C.File_Name = File_Name;
+    C.Infer;
+    write (C.Element_Report) to file (append File_Name '.elems');
+    verbose 'code ' [C.Nsl];
+    # debug;
+}

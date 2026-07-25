@@ -1,0 +1,664 @@
+flowerbox 'gal simple syntax parser generator';
+parser Gal_Token
+{
+    tokens
+        Character
+        Char_Number
+        Char_Punct
+        Char_Line
+        Char_Ident
+        ;
+    either Token
+        Token_Line
+        Token_Ws
+        Token_Quote
+        Token_Number
+        Token_Punct
+        Token_Comma
+        Token_Word
+        Character
+        ;
+    sequence Token_Comma
+        Character_Comma
+        ;
+    sequence Token_Number
+        [optional '-']
+        [repeating Char_Number]
+        [optional "."]
+        [optrep Char_Number]
+        ;
+    sequence Token_Punct
+        Char_Punct
+        ;
+    sequence Token_Line
+        Char_Line
+        ;
+    sequence Token_Ws
+        [repeating Ws]
+        ;
+    either Ws
+        ' '
+        [tab]
+        Token_Line
+        ;
+    sequence Token_Word
+        [repeating Char_Ident]
+        ;
+}
+
+parser Gal
+{
+    tokens
+        Token_Number
+        Token_Quote
+        Token_Comma
+        Token_Keyword
+        Token_Word
+        ;
+    sequence Program
+        [repeating Statement]
+        ;
+    sequence Statement
+        [repeating Expression]
+        [optrep Statement_Tail]
+        Statement_End
+        ;
+    either Expression
+        Operation
+        Syntax
+        Token_Number
+        Token_Quote
+        Token_Keyword
+        Token_Word
+        ;
+    either Statement_End
+        ";"
+        Block
+        ;
+    sequence Block
+        "{"
+        [optrep Statement]
+        "}"
+        ;
+    sequence Operation
+        '('
+        [repeating Expression]
+        ')'
+        ;
+    sequence Syntax
+        '['
+        [repeating Expression]
+        [optrep Syntax_Tail]
+        ']';
+    sequence Syntax_Tail
+        ','
+        [repeating Expression];
+    sequence Statement_Tail
+        ','
+        [repeating Expression];
+}
+
+class set Spell
+{
+    method string Gal_Arguments
+    {
+        string Code '';
+        object Arg;
+        for each Arg in [my Arguments]
+        {
+            if (isa Arg Statement_Tail)
+            {
+                append Code [Arg.Gal];
+            }
+            else
+            {
+                append Code ' ' [Arg.Gal];
+            }
+        }
+        return Code;
+    }
+    method string Gal_Args
+    {
+        string Code '';
+        object Arg;
+        for each Arg in [my Listargs]
+        {
+            if (isa Arg Statement_Tail)
+            {
+                append Code [Arg.Gal];
+            }
+            else
+            {
+                append Code ' ' [Arg.Gal];
+            }
+        }
+        return Code;
+    }
+}
+
+class set Syntax
+{
+    method string Syntax_Gal [string Code]
+    {
+        string Text (append '[' Code ']');
+        return Text;
+    }
+}
+
+class set Block
+{
+    property string Gal_Statements;
+}
+
+class set Statement
+{
+    method string Gal_Block
+    {
+        string Code ';';
+        forgive
+        {
+            Code = [my Block Gal];
+        }
+        return Code;
+    }
+}
+
+generator Gal
+{
+    english 'generate the optimal gal code for each language element in the compiler dialect.';
+
+    generate Program
+    {
+        string Code '';
+        object Stmt;
+        for each Stmt in [my Statements]
+        {
+            undefined [Stmt.Gal]
+            {
+                Stmt.Infer_Gal;
+            }
+            Code s+ [Stmt.Gal] [line];
+        }
+        i = Code;
+    }
+    generate Token
+    {
+        i = [my Text];
+    }
+    generate Token_Number
+        [my Text];
+    generate Statement
+    {
+        verbosity;
+        verbosity 'gal statement: ' [self];
+        string Between '';
+        comment `debug if ([self] is a Statement_Module);`;
+        comment `debug if ([self] is a Statement_Statement);`;
+        string Code '';
+        defined [my Verb]
+        {
+            append Code Between [my Verb];
+            Between = ' ';
+        }
+        append Code
+            (i Gal_Arguments)
+            (i Gal_Block);
+        i = Code;
+        comment `verbose '~~~' Code '~~~';`;
+    }
+    generate Statement_Tail
+    {
+        join Keys [my Key_Words] ' ';
+        string Code
+            ', ' Keys (i Gal_Arguments);
+        i = Code;
+    }
+    generate Operation
+    {
+        join Keys [my Key_Words] ' ';
+        string Code
+            '(' Keys (i Gal_Arguments) ')';
+        i = Code;
+    }
+    generate Syntax
+    {
+        join Code [my Key_Words] ' ';
+        flag First [true];
+        object Arg;
+        for each Arg in [my Arguments]
+        {
+            if (First and (Arg is a Syntax_Tail))
+            {
+                Code = (i Syntax_Gal Code);
+                First = [false];
+            }
+            append Code ' ' [Arg.Gal];
+        }
+        if First
+        {
+            Code = (i Syntax_Gal Code);
+        }
+        i = Code;
+    }
+    generate Syntax_Tail
+    {
+        join Keys [my Key_Words] ' ';
+        string Code Keys (i Gal_Arguments);
+        Code = (i Syntax_Gal Code);
+        i = Code;
+    }
+    generate Block
+    {
+        string Statements '';
+        object Line;
+        for each Line in [my Statements]
+        {
+            append Statements [Line.Gal] [line];
+        }
+        string Code;
+        if (Statements s= '')
+        {
+            Code = ';';
+        }
+        else
+        {
+            Statements = (i Indent Statements);
+            Code = (append [line] '{' [line] Statements '}');
+        }
+        my Gal_Statements = Statements;
+        i = Code;
+    }
+
+    generate Statement_Flowerbox
+    {
+        string Code 'flower box' (i Gal_Arguments) (i Gal_Block);
+        i = Code;
+    }
+
+    generate Declaration_Statement
+    {
+        string Name [my Name Gal];
+        string Value '';
+        defined [my Value]
+        {
+            append Value ' = ' [my Value Gal];
+        }
+        string Code [my Keyword] ' ' Name Value ';';
+        i = Code;
+    }
+
+    generate Statement_Call
+        Object '.' Method (i Gal_Args) ';';
+
+    generate Operation_Call
+        '(' Object '.' Method (i Gal_Args) ')';
+
+    generate Statement_Colon
+        Class_Name ':' Method_Name (i Gal_Args) ';';
+
+    generate Operation_Colon
+        '(' Class ':' Method (i Gal_Args) ')';
+
+    generate Statement_Append
+        'append' (i Gal_Arguments) ';';
+
+    generate Statement_Argument
+        'argument ' Argument_Name ' ' Data_Type ' ' Usage ';';
+
+    generate Statement_Catch
+        'catch' (i Gal_Arguments) (i Gal_Block);
+
+    generate Statement_Defined
+        'defined ' Expression (i Gal_Block);
+
+    generate Statement_Undefined
+        'undefined ' Expression (i Gal_Block);
+
+    generate Statement_Dialect
+        'dialect' (i Gal_Arguments) (i Gal_Block);
+
+    generate Statement_Dictionary
+        'dictionary ' Name ';';
+
+    generate Statement_Else
+        'else' (i Gal_Block);
+
+    generate Statement_Else_If
+        'else if' (i Gal_Arguments) (i Gal_Block);
+
+    generate Operation_Add
+        '(' Op1 ' + ' Op2 (i Gal_Args) ')';
+
+    generate Operation_Minus
+    {
+        string Code '';
+        if (llength [my Arguments] > 1)
+        {
+            append Code '(' [my Op1 Gal] ' - ' [my Op2 Gal] (i Gal_Args) ')';
+        }
+        else
+        {
+            append Code '(-' (i Gal_Arguments) ')';
+        }
+        i = Code;
+    }
+
+    generate Operation_Multiply
+        '(' Op1 ' * ' Op2 (i Gal_Args) ')';
+
+    generate Operation_Divide
+        '(' Op1 ' / ' Op2 (i Gal_Args) ')';
+
+    generate Operation_And
+        '(' Op1 ' and ' Op2 (i Gal_Args) ')';
+
+    generate Operation_Or
+        '(' Op1 ' or ' Op2 (i Gal_Args) ')';
+
+    generate Statement_Method
+        'method' (i Gal_Arguments) (i Gal_Block);
+
+    generate Statement_Class
+    {
+        string Class_Name [my Class_Name Gal];
+        string Ancestor '';
+        defined [my Ancestor]
+        {
+            if ([my Ancestor] is a Syntax_Is)
+            {
+                append Ancestor ' ' [my Ancestor Gal];
+            }
+            else
+            {
+                append Ancestor ' is ' [my Ancestor Gal];
+            }
+        }
+        string Block (i Gal_Block);
+        string Code 'class ' Class_Name Ancestor Block;
+        i = Code;
+    }
+
+    generate Statement_Class_Set
+        'class set ' Class_Name (i Gal_Block);
+
+    generate Statement_Class_Method
+    {
+        string Code 'class method' (i Gal_Arguments) (i Gal_Block);
+        i = Code;
+    }
+
+    generate Statement_Write_To
+        'write ' Text ' to file ' File ';';
+
+    generate Operation_Append
+        '(append' (i Gal_Arguments) ')';
+
+    generate Statement_Dictionary_Assign
+        Dict ' ' Subscript ' d= ' Value ';';
+
+
+    generate Statement_Property
+    {
+        string Type [my Type Gal];
+        string Name [my Name Gal];
+        string Code 'property ' Type ' ' Name;
+        defined [my Value]
+        {
+            append Code ' = ' [my Value Gal];
+        }
+        append Code ';';
+        i = Code;
+    }
+    generate Statement_Class_Property
+    {
+        string Type [my Type Gal];
+        string Name [my Name Gal];
+        string Code 'class property ' Type ' ' Name;
+        defined [my Value]
+        {
+            append Code ' = ' [my Value Gal];
+        }
+        append Code ';';
+        i = Code;
+    }
+    generate Statement_Propset
+        Object '.' Property ' = ' Value ';';
+
+    generate Syntax_Property
+        '[' Object '.' Property_Name (i Gal_Args) ']';
+    generate Syntax_My
+        '[my ' Property (i Gal_Args) ']';
+    generate Operation_Is_Null
+        '(' Op1 ' is null)';
+    generate Statement_For_Each_In
+        'for each ' Item ' in ' List (i Gal_Block);
+    generate Statement_String
+        'string' (i Gal_Arguments) ';';
+
+    generate Statement_My_Equal
+        'my ' Property_Name ' = ' Value ';';
+    generate Statement_Assign
+        Destination ' = ' Value ';';
+    generate Operation_Contains
+        '(' String ' contains ' Search ')';
+    generate Statement_Return_If
+    {
+        string Condition [my Condition Gal];
+        string Code 'return ';
+        if [my Value]
+        {
+            append Code [my Value Gal] ' ';
+        }
+        append Code 'if ' Condition ';';
+        i = Code;
+    }
+    generate Statement_If_Return
+    {
+        string Condition [my Condition Gal];
+        string Code 'if ' Condition ' return';
+        if (defined [my Value])
+        {
+            string Value [my Value Gal];
+            append Code ' ' Value;
+        }
+        append Code ';';
+        i = Code;
+    }
+    generate Operation_Is_A
+        '(' Object ' is a' (i Gal_Args) ')';
+    generate Operation_String_Equal
+        '(' Op1 ' s= ' Op2 ')';
+    generate Statement_List_Copy
+        'list ' Target ' copy of ' Source ';';
+    generate Operation_Dict_Exists
+        '(' Dictionary ' dexists ' Key ')';
+    generate Operation_Equal
+        '(' Op1 ' = ' Op2 ')';
+    generate Syntax_Class_Name
+    {
+        string Target '';
+        forgive
+        {
+            Target = [my Object Gal];
+            append Target ' ';
+        }
+        string Code '[' Target 'class name]';
+        i = Code;
+    }
+    generate Operation_Not_Equal
+        '(' Op1 ' != ' Op2 ')';
+    generate Operation_Greater
+        '(' Op1 ' > ' Op2 ')';
+    generate Operation_Less
+        '(' Op1 ' < ' Op2 ')';
+    generate Operation_Greater_Equal
+        '(' Op1 ' >= ' Op2 ')';
+    generate Operation_Less_Equal
+        '(' Op1 ' <= ' Op2 ')';
+    generate Operation_String_Not_Equal
+        '(' Op1 ' sne ' Op2 ')';
+    generate Operation_String_Greater
+        '(' Op1 ' sgt ' Op2 ')';
+    generate Operation_String_Less
+        '(' Op1 ' slt ' Op2 ')';
+    generate Operation_String_Greater_Equal
+        '(' Op1 ' sge ' Op2 ')';
+    generate Operation_String_Less_Equal
+        '(' Op1 ' sle ' Op2 ')';
+    generate Operation_File_Exists
+        '(file ' Path ' exists)';
+    generate Operation_List_Length
+        '(llength ' List ')';
+    generate Statement_List
+        'list' (i Gal_Arguments) ';';
+    generate Statement_I
+        'i' (i Gal_Arguments) ';';
+
+    comment `include resolution: replace the statement with the text of the
+    named plugin's compiled .gal file. only the gal stage resolves includes,
+    and only .gal files (which are include-free by construction) can be
+    included, so nested includes terminate at build time instead of
+    recursing here.`;
+    generate Statement_Include
+    {
+        string Name '';
+        forgive
+        {
+            Name = [my Name Unquoted];
+        }
+        if (Name s= '')
+        {
+            error 'include requires a quoted plugin name';
+        }
+        string FN (append Name '.gal');
+        if (not (file FN exists))
+        {
+            error 'include: no such file ' FN;
+        }
+        string T;
+        fread T FN;
+        i = T;
+    }
+}
+
+class Gal_Compiler is Compiler
+{
+    property object Token_Parser (new Gal_Token_Parser);
+    property object Parser (new Gal_Parser);
+    property object Generator (new Gal_Generator [self]);
+    property object Dialect (new Dialect_Compiler);
+
+    method string Element_Report
+    {
+        string Text '';
+        object Elem;
+        integer Count 0;
+        for each Elem in [my Elements]
+        {
+            append Text (string Count) '. ' [class name Elem];
+            if (Elem is a Spell)
+            {
+                append Text
+                    '/' [class name [Elem.Classification]]
+                    ' args ' (string (llength [Elem.Arguments]))
+                    ' largs ' (string (llength [Elem.Listargs]))
+                    ' kw ' (string (llength [Elem.Keywords]));
+            }
+            forgive
+            {
+                if (not ([Elem.Gal] is null))
+                {
+                    append Text ' gal <' [Elem.Gal] '>';
+                }
+            }
+            forgive
+            {
+                if (not ([Elem.Fallback] is null))
+                {
+                    append Text ' fallback <' [Elem.Fallback] '>';
+                }
+            }
+            forgive
+            {
+                if (not ([Elem.Python] is null))
+                {
+                    append Text ' python <' [Elem.Python] '>';
+                }
+            }
+            forgive
+            {
+                if (not ([Elem.Javascript] is null))
+                {
+                    append Text ' javascript <' [Elem.Javascript] '>';
+                }
+            }
+            forgive
+            {
+                if (not ([Elem.Error] is null))
+                {
+                    append Text ' ERROR <' [Elem.Error] '>';
+                }
+            }
+            append Text [line];
+            increment Count;
+        }
+        return Text;
+    }
+
+    method number Infer_Tokens
+    {
+        comment `the gal parser never sees whitespace: scan with the string
+        lexer and drop whitespace and line tokens`;
+        return (i Scan_Tokens [false]);
+    }
+    method number Infer_Code
+    {
+        verbosity;
+        verbose "Gal_Compiler.Infer_Code: starting code generation";
+
+        [my Generator Elements] = [my Elements];
+        [my Generator].Infer_Gal;
+
+        verbose "Gal_Compiler.Infer_Code: calling Generator.Infer_Gal";
+
+        comment `a failed include must abort the build: the generator loop
+        records the failure on the element, and without this check a
+        silently truncated program would be written as if it succeeded.`;
+        object Elem;
+        for each Elem in [my Elements]
+        {
+            continue if (not (Elem is a Spell));
+            forgive
+            {
+                if (([Elem.Classification] is a Statement_Include) and (not ([Elem.Error] is null)))
+                {
+                    say 'gal include failed: ' [Elem.Error];
+                    return 0;
+                }
+            }
+        }
+
+        # 'Get the top-level program element';
+        object Top = (llast [my Elements]);
+
+        if Verbose
+        {
+            string Report (i Element_Report);
+            say Report;
+        }
+
+        verbose "Gal_Compiler.Infer_Code: ensuring Top element has gal code";
+
+        undefined [Top.Gal]
+        {
+            say (i Error_Report);
+            return 0;
+        }
+        string Code [Top.Gal];
+        my Gal = Code;
+
+        verbose "Gal_Compiler.Infer_Code: successfully generated gal code";
+
+        return 1;
+    }
+}

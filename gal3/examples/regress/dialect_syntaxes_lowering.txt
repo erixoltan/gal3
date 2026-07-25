@@ -1,0 +1,22 @@
+flowerbox 'regression: the dialect lowering emits a bare newline for each
+statement carrying an empty Fallback_Declaration. python (is not None) and
+any host that conflates None with the empty string disagree here, and the
+difference only shows as whitespace - see docs/mumps_design.md';
+
+module Syndemo
+{
+    class Base;
+    class Dialect;
+    class Syntax;
+    class Syntax_Us is Syntax;
+    class Syntax_Variant is Syntax;
+    dialect Demo
+    {
+        english 'a dialect with a compressed syntaxes declaration';
+        syntaxes,  Syntax_Us 'us',  Syntax_Variant 'variant';
+    }
+    main
+    {
+        say 'lowered';
+    }
+}

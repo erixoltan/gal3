@@ -1,0 +1,4 @@
+main
+{
+    say [tab] "Hello, World!";
+}

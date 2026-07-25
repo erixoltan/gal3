@@ -1,0 +1,14 @@
+[project]
+name = "gal-toolchain"
+version = "0.1.0"
+description = "Shared, uv-managed Python environment for the whole gal/goalspell compiler toolchain (gal1, gal2, gal3)."
+readme = "README.md"
+requires-python = ">=3.14"
+
+# The compiler, its Runtime, and every build/oracle script use only the
+# Python standard library — deliberately, so `uv sync` is instant and the
+# bootstrap has no third-party surface.
+dependencies = []
+
+[dependency-groups]
+dev = ["pytest", "pytest-cov", "black", "isort", "ipython"]

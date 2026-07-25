@@ -1,0 +1,60 @@
+#!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Rebuild the pyparse artifact through the GAL3 chain (gal.py / fallback.py /
+# galpy.py). This is required, not a preference: memoization and left-recursion
+# seed-growing live in gal3's parser generators; gal2-built parsers have
+# neither, and python.gram is pervasively left-recursive.
+# python_parser.txt must exist (python ~/.gal3/peg.py grammars/python-3.11.gram python_parser.txt)
+
+source "$(dirname "$(readlink -f "$0")")/../galenv" || exit 1
+
+BUILD="${GAL_BUILD:-$GAL_HOME/gal3build}"
+BIN="$HOME/.gal3"
+mkdir -p "$BUILD" "$BIN"
+
+cp compiler_base.txt compiler_dialect.txt attributes_inference.txt structure_inference.txt data_type_inference.txt inheritance_inference.txt llm_inference.txt py_base.txt pyparse_base.txt python_parser.txt pyparse_main.txt "$BUILD"/ || exit 1
+
+function gal3stage
+{
+    # gal3stage <binary> <in> <out>
+    local TF=/tmp/pyparse_stage.out
+    rm -f "$TF"
+    echo "        $1 $2 '-->' $3"
+    python "$BIN/$1" "$2" "$TF"
+    if [ ! -f "$TF" ]; then
+        echo "$1 failed creating $3. aborting"
+        exit 1
+    fi
+    mv "$TF" "$3"
+    rm -f "$TF.elems" 2>/dev/null
+}
+
+echo "">"$BUILD/zero.txt"
+cat "$BUILD/compiler_base.txt" "$BUILD/compiler_dialect.txt" "$BUILD/attributes_inference.txt" "$BUILD/structure_inference.txt" "$BUILD/data_type_inference.txt" "$BUILD/inheritance_inference.txt" "$BUILD/llm_inference.txt" >> "$BUILD/zero.txt"
+
+echo "">"$BUILD/pyparse.txt"
+cat "$BUILD/zero.txt" "$BUILD/py_base.txt" "$BUILD/pyparse_base.txt" "$BUILD/python_parser.txt" "$BUILD/pyparse_main.txt" >> "$BUILD/pyparse.txt"
+
+echo "module Compiler {">"$BUILD/pyparse.tx2"
+cat "$BUILD/pyparse.txt">>"$BUILD/pyparse.tx2"
+echo "}">>"$BUILD/pyparse.tx2"
+
+gal3stage gal.py "$BUILD/pyparse.tx2" "$BUILD/pyparse.gal"
+
+FALLBACK="$BUILD/pyparse.fallback"
+cp "$BUILD/pyparse.gal" "$FALLBACK"
+rm -f "$BUILD"/pyparse.fb* &> /dev/null
+for (( COUNTER=0; COUNTER<6; COUNTER++)); do
+    TEMP="$BUILD/pyparse.fb$COUNTER"
+    gal3stage fallback.py "$FALLBACK" "$TEMP"
+    if cmp -s "$FALLBACK" "$TEMP"; then
+        echo "    files are equal!"
+        break
+    fi
+    FALLBACK="$TEMP"
+done
+cp "$FALLBACK" "$BUILD/pyparse.atomic"
+
+gal3stage galpy.py "$BUILD/pyparse.atomic" "$BUILD/pyparse.py"
+cp "$BUILD/pyparse.py" "$BIN/pyparse.py"
+echo "pyparse build complete: $BIN/pyparse.py"

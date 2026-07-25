@@ -1,0 +1,52 @@
+flowerbox 'regression test for the python-specific dialect elements';
+
+comment `
+This is the hand-written gal3 rendition of examples/pysmall.py, using the
+python-specific dialect elements (python print, python while, python for
+range, and the py operations). It validates the fallback lowering before
+the python-to-gal translator exists: compiled through the gal3 chain and
+run, its output must match CPython running examples/pysmall.py byte for
+byte. Later the pygal translator must regenerate this same program shape
+from the python source automatically.
+
+Build and run (from gal3/, after ./build):
+  cat compiler stack files + this file is NOT needed - this is a standalone
+  program: run gal.py, fallback.py (iterate), galpy.py on this file alone,
+  then python the result with Runtime.py on the path.
+`;
+
+class Base;
+
+class Py_Program
+{
+    method variant Greet [variant Name]
+    {
+        python print (py + 'Hello, ' Name);
+        return [null];
+    }
+}
+
+main
+{
+    object Py_Module (new Py_Program);
+    variant I 0;
+    python while (py < I 3)
+    {
+        Py_Module.Greet (py str I);
+        I = (py + I 1);
+    }
+    python for range J 4
+    {
+        if (py = (py mod J 2) 0)
+        {
+            python print J 'even';
+        }
+        else
+        {
+            python print J 'odd';
+        }
+    }
+    python print (py * 6 7) (py - 10 3) (py / 7 2) (py neg 5);
+    python print (py and (py <= 1 1) (py or (py > 2 3) (py != 1 2)));
+    python print (py not (py >= 2 3));
+}

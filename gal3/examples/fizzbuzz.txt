@@ -1,0 +1,27 @@
+flowerbox 'fizzbuzz: the classic counting game, program 2 of the five-languages series';
+
+module Fizzbuzz
+{
+    main
+    {
+        for range I 1 20
+        {
+            if ((I mod 15) = 0)
+            {
+                say "FizzBuzz";
+            }
+            else if ((I mod 3) = 0)
+            {
+                say "Fizz";
+            }
+            else if ((I mod 5) = 0)
+            {
+                say "Buzz";
+            }
+            else
+            {
+                say I;
+            }
+        }
+    }
+}

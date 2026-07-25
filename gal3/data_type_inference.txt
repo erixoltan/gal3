@@ -1,0 +1,490 @@
+flowerbox 'data type inference: definitional and contextual types for every language element';
+
+comment `
+Ported from gal2's Data_Types.gal and extended, per the design note in
+docs/data_type_inference.md. Every element can carry two properties:
+
+Data_Type is definitional - what the element is. A quote token is a
+string, an addition is a number, a variable is whatever its declaration
+says. Usage is contextual - what the surrounding element applies to it:
+every argument of a say statement is used as a string, the condition of
+an if is used as a flag. When the two differ, a strongly typed generator
+converts; gal itself does not enforce agreement, so a mismatch is the
+generator's decision, not an error.
+
+Result types are declarative wherever possible: the dialect declarations
+carry a Data_Type property (the Syntax_True pattern, the same mechanism
+that carries operator precedence), so an operation's instances default to
+their result type without a handler here. Contextual usage is also mostly
+declarative: the argument declarations in the dialect already state the
+type each statement imposes on each argument, and Declared_Usage below
+stamps those expectations onto the actual arguments through the class
+registry. Handlers are only written where something is not declarable:
+variadic argument lists, declaration statements typing their names, and
+literal tokens.
+
+Variable references resolve through the contexts Infer_Variables
+populates: declarations and parameters register their names and types in
+the enclosing variable context (the Get_Module pattern - an element asks
+its parent, and scoping elements such as methods return themselves), and
+word tokens look themselves up through that chain.
+`;
+
+class set Element
+{
+    property string Data_Type '';
+    property string Usage '';
+
+    method void Argument_Types [string Type]
+    {
+        comment `impose one usage type on every argument, for variadic
+        statements such as say whose arguments are not declared`;
+        object Argument;
+        forgive
+        {
+            for each Argument in [my Arguments]
+            {
+                object AC [Argument.Classification];
+                if ([AC.Usage] s= '')
+                {
+                    AC.Usage = Type;
+                }
+            }
+        }
+    }
+
+    method flag Is_Type_Name [string T]
+    {
+        comment `the declared argument vocabulary mixes types with roles
+        such as variable, value, class and method; only real types are
+        stamped as usage, and variant imposes nothing`;
+        string K ' flag integer number string list dictionary object ';
+        return (contains K (append ' ' T ' '));
+    }
+
+    method void Declared_Usage
+    {
+        comment `stamp the usage each argument declaration imposes onto
+        the actual arguments, positionally, using the declaration this
+        classification was generated from. keyword members are part of
+        the verb and carry no argument position.`;
+        forgive
+        {
+            object Decl (dget [Statement_Class:Names] [class name]);
+            list Types;
+            object M;
+            for each M in [Decl.Block Statements]
+            {
+                object MC [M.Classification];
+                flag Wanted [false];
+                if (MC is a Statement_Argument)
+                {
+                    Wanted = [true];
+                }
+                if (MC is a Statement_Optional)
+                {
+                    Wanted = [true];
+                }
+                continue if (not Wanted);
+                string T '';
+                forgive
+                {
+                    object TE [MC.Data_Type];
+                    T = (TE.Get_Input);
+                }
+                push Types T;
+            }
+            integer N (llength [my Arguments]);
+            integer ND (llength Types);
+            if (ND < N)
+            {
+                N = ND;
+            }
+            integer Sub;
+            integer End (N - 1);
+            for Sub range 0 End
+            {
+                string DT (lget Types Sub);
+                continue if (not (i Is_Type_Name DT));
+                object Arg (lget [my Arguments] Sub);
+                object AC [Arg.Classification];
+                if ([AC.Usage] s= '')
+                {
+                    AC.Usage = DT;
+                }
+            }
+        }
+    }
+
+    method void Declare_Name_Type [string Type]
+    {
+        comment `a declaration statement gives its name the declared
+        definitional type, and its initial value that usage`;
+        forgive
+        {
+            object N [my Name];
+            object NC [N.Classification];
+            NC.Data_Type = Type;
+        }
+        forgive
+        {
+            if (not ([my Value] is null))
+            {
+                object V [my Value];
+                object VC [V.Classification];
+                if ([VC.Usage] s= '')
+                {
+                    VC.Usage = Type;
+                }
+            }
+        }
+    }
+}
+
+inference Data_Types
+{
+    handle Compiler
+    {
+        verbosity;
+        object E;
+        for each E in [my Elements]
+        {
+            try
+            {
+                [E.Classification].Infer_Data_Types;
+            }
+            catch Err
+            {
+                object C = [E.Classification];
+                if (! C)
+                {
+                    C = E;
+                }
+                say 'Error inferring data types for '
+                    [class C name]
+                    ': '
+                    Err;
+                return 0;
+            }
+        }
+        return 1;
+    }
+
+    handle Element
+    {
+        return 1;
+    }
+
+    handle Spell
+    {
+        i Declared_Usage;
+        return 1;
+    }
+
+    handle Token_Word
+    {
+        comment `a word token in an expression may be a variable
+        reference: resolve its definitional type through the enclosing
+        variable context chain`;
+        if ([my Data_Type] s= '')
+        {
+            forgive
+            {
+                string T (i Lookup_Variable [my Text]);
+                if (T sgt '')
+                {
+                    my Data_Type = T;
+                }
+            }
+        }
+        return 1;
+    }
+
+    handle Syntax_My
+    {
+        comment `a simple my reference takes the type of the property it
+        names on the owner class; chained references stay untyped for now`;
+        if ([my Data_Type] s= '')
+        {
+            forgive
+            {
+                if ((llength [my Listargs]) = 0)
+                {
+                    object Cls (i Get_Owner_Class);
+                    return 1 if (Cls is null);
+                    object P [my Property];
+                    string N (P.Get_Input);
+                    if ([Cls.Variables] dexists N)
+                    {
+                        my Data_Type = (dget [Cls.Variables] N);
+                    }
+                }
+            }
+        }
+        return 1;
+    }
+
+    handle Token_Number
+    {
+        if ([my Text] contains '.')
+        {
+            my Data_Type = 'number';
+        }
+        else
+        {
+            my Data_Type = 'integer';
+        }
+        return 1;
+    }
+
+    comment `variadic statements: every argument is used as a string`;
+
+    handle Statement_Flowerbox
+    {
+        i Argument_Types 'string';
+        return 1;
+    }
+
+    handle Statement_Comment
+    {
+        i Argument_Types 'string';
+        return 1;
+    }
+
+    handle Statement_Say
+    {
+        i Argument_Types 'string';
+        return 1;
+    }
+
+    handle Statement_Verbose
+    {
+        i Argument_Types 'string';
+        return 1;
+    }
+
+    handle Statement_Error
+    {
+        i Argument_Types 'string';
+        return 1;
+    }
+
+    handle Statement_Append
+    {
+        i Declared_Usage;
+        object Arg;
+        forgive
+        {
+            for each Arg in [my Listargs]
+            {
+                object AC2 [Arg.Classification];
+                if ([AC2.Usage] s= '')
+                {
+                    AC2.Usage = 'string';
+                }
+            }
+        }
+        return 1;
+    }
+
+    handle Operation_Append
+    {
+        object Arg;
+        forgive
+        {
+            for each Arg in [my Arguments]
+            {
+                object AC3 [Arg.Classification];
+                if ([AC3.Usage] s= '')
+                {
+                    AC3.Usage = 'string';
+                }
+            }
+        }
+        return 1;
+    }
+
+    comment `declaration statements type their names definitionally`;
+
+    handle Statement_Flag
+    {
+        i Declared_Usage;
+        i Declare_Name_Type 'flag';
+        return 1;
+    }
+
+    handle Statement_Integer
+    {
+        i Declared_Usage;
+        i Declare_Name_Type 'integer';
+        return 1;
+    }
+
+    handle Statement_Number
+    {
+        i Declared_Usage;
+        i Declare_Name_Type 'number';
+        return 1;
+    }
+
+    handle Statement_String
+    {
+        i Declared_Usage;
+        i Declare_Name_Type 'string';
+        return 1;
+    }
+
+    handle Statement_Object
+    {
+        i Declared_Usage;
+        i Declare_Name_Type 'object';
+        return 1;
+    }
+
+    handle Statement_Dictionary
+    {
+        i Declared_Usage;
+        i Declare_Name_Type 'dictionary';
+        return 1;
+    }
+
+    handle Statement_List
+    {
+        i Declared_Usage;
+        i Declare_Name_Type 'list';
+        return 1;
+    }
+
+    handle Statement_Global_List
+    {
+        i Declared_Usage;
+        i Declare_Name_Type 'list';
+        return 1;
+    }
+
+    handle Statement_Variant
+    {
+        i Declared_Usage;
+        i Declare_Name_Type 'variant';
+        return 1;
+    }
+
+    comment `ported from the gal2 inference`;
+
+    handle Statement_Module
+    {
+        forgive
+        {
+            object N [my Name];
+            object NC [N.Classification];
+            NC.Data_Type = 'module';
+            NC.Usage = 'module';
+        }
+        return 1;
+    }
+
+    handle Operation_New
+    {
+        my Data_Type = 'object';
+        forgive
+        {
+            object C [my Class_Name];
+            object CC [C.Classification];
+            CC.Data_Type = 'class';
+            CC.Usage = 'class';
+        }
+        return 1;
+    }
+}
+
+class set Compiler
+{
+    method string Data_Type_Report
+    {
+        comment `coverage over the current program: how many elements
+        carry each definitional type and each usage, and which
+        classification classes remain untyped - the same
+        coverage-driven shape as the unclassified verbs report`;
+        dictionary Types;
+        dictionary Usages;
+        dictionary Untyped;
+        integer Count;
+        object E;
+        for each E in [my Elements]
+        {
+            object C [E.Classification];
+            continue if (C is null);
+            string DT '';
+            string U '';
+            forgive
+            {
+                DT = [C.Data_Type];
+            }
+            forgive
+            {
+                U = [C.Usage];
+            }
+            comment `some classifications bind Data_Type and Usage to
+            declaration elements rather than strings; those are not
+            inferred types and do not belong in the counts`;
+            if (DT is an Element)
+            {
+                DT = '';
+            }
+            if (U is an Element)
+            {
+                U = '';
+            }
+            if (DT sgt '')
+            {
+                comment `dget yields null for a missing key rather than
+                raising, so the count must be guarded by dexists - a
+                forgive around it never fires and leaves Count null`;
+                Count = 0;
+                if (dexists Types DT)
+                {
+                    Count = (dget Types DT);
+                }
+                Types DT d= (Count + 1);
+            }
+            else if (C is an Operation)
+            {
+                string CN [class C name];
+                Count = 0;
+                if (dexists Untyped CN)
+                {
+                    Count = (dget Untyped CN);
+                }
+                Untyped CN d= (Count + 1);
+            }
+            if (U sgt '')
+            {
+                Count = 0;
+                if (dexists Usages U)
+                {
+                    Count = (dget Usages U);
+                }
+                Usages U d= (Count + 1);
+            }
+        }
+        string Text 'DATA TYPE REPORT' [line];
+        string K;
+        integer V;
+        append Text 'definitional:' [line];
+        iterate Types K V
+        {
+            append Text '  ' K ' ' (string V) [line];
+        }
+        append Text 'usage:' [line];
+        iterate Usages K V
+        {
+            append Text '  ' K ' ' (string V) [line];
+        }
+        append Text 'untyped operations:' [line];
+        iterate Untyped K V
+        {
+            append Text '  ' K ' ' (string V) [line];
+        }
+        return Text;
+    }
+}

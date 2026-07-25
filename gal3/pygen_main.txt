@@ -1,0 +1,23 @@
+flowerbox 'normalized python generator main: parse python source and write it back normalized';
+main [string Source_File, string Target_File]
+{
+    verbosity;
+    verbose 'normalized python generator';
+    verbose 'input file: ' Source_File;
+    object C = (new Pygen_Compiler);
+    C.File_Name = Source_File;
+    number Result = (C.Regenerate);
+    if (Result > 0)
+    {
+        write [C.Normpy] to Target_File;
+        say 'pygen OK, normalized source written to ' Target_File;
+    }
+    else
+    {
+        if ((llength [C.Elements]) > 0)
+        {
+            write (C.Element_Report) to (Target_File s+ '.elems');
+        }
+        say 'pygen FAILED';
+    }
+}

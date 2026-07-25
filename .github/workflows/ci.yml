@@ -1,0 +1,96 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# gal CI — the mechanical contribution gate.
+#
+# The fixpoint and the oracles ARE the reviewer: a PR that keeps them green is
+# reviewable, one that breaks them is not. See CONTRIBUTING.md.
+#
+# Tiered by runtime:
+#   pr-gate  — every push / PR, target < 10 min: prove the self-hosting
+#              fixpoint, then the regression + cross-target (py/js) oracles.
+#   nightly  — the expensive proof: full five-languages oracle (every backend
+#              except MUMPS) plus self-hosting on Node and the JVM.
+#
+# Known gap (week 1): the runner has no YottaDB, so the MUMPS oracle cells and
+# ./mumpsself run locally only. Tracked in CONTRIBUTING.md.
+
+name: gal CI
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: '0 7 * * *'   # ~07:00 UTC nightly
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
+
+jobs:
+  pr-gate:
+    name: PR gate — fixpoint + oracles (py/js)
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Bootstrap + prove the self-hosting fixpoint
+        run: ./bootstrap.sh
+
+      - name: Regression oracle
+        run: gal3/bin/regress_oracle.sh
+
+      - name: Five-languages oracle (py, js — byte-identical output)
+        run: GAL_ORACLE_LANGS=py,js gal3/bin/five_oracle.sh
+
+  nightly:
+    name: Nightly — full oracle (minus MUMPS) + JS/JVM self-host
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Bootstrap + prove the self-hosting fixpoint
+        run: ./bootstrap.sh
+
+      - name: Regression oracle
+        run: gal3/bin/regress_oracle.sh
+
+      - name: Five-languages oracle (all backends except MUMPS)
+        run: GAL_ORACLE_LANGS=py,js,cpp,go,java,c gal3/bin/five_oracle.sh
+
+      - name: Self-host the compiler on Node (jsself)
+        run: cd gal3 && ./jsself
+
+      - name: Self-host the compiler on the JVM (javaself)
+        run: cd gal3 && ./javaself

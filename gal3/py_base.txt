@@ -1,0 +1,670 @@
+flowerbox 'python lexer: token element classes and the stateful line discipline';
+
+comment `
+Stateful lexer for Python source (pinned to the 3.11 token model: f-strings
+are opaque STRING tokens). Token shapes are recognized by the proven
+Factory / Append_Character state-machine pattern; the parts that cannot be
+expressed by grammar rules - the indentation stack, implicit line joining
+inside parens and brackets and braces, explicit backslash joining, blank
+line suppression, and the synthesized INDENT / DEDENT / NEWLINE / ENDMARKER
+tokens - live in the line discipline in Py_Compiler.
+
+Significant tokens go to the positional Tokens list that the generated
+Python parser will consume. Trivia (comments, non-logical newlines,
+whitespace, backslash joins) goes to the parallel Trivia list, preserved
+for later comment attachment. The validation oracle is CPython tokenize.
+`;
+
+class Py_Token is Token;
+
+class Py_Name is Py_Token
+{
+    method integer Append_Character [object Char]
+    {
+        if ((Char is a Char_Ident) or (Char is a Char_Number))
+        {
+            push [my Elements] Char;
+            append [my Text] [Char.Text];
+            my End_Position = [Char.End_Position];
+            return 1;
+        }
+        return 0;
+    }
+}
+
+class Py_Number is Py_Token
+{
+    property string Base 'dec';
+    property flag Seen_Dot [false];
+    property flag Seen_Exp [false];
+    property flag Sign_Ok [false];
+    property flag Done [false];
+    method integer Append_Character [object Char]
+    {
+        return 0 if [my Done];
+        string C [Char.Text];
+        if [my Sign_Ok]
+        {
+            my Sign_Ok = [false];
+            if ((C s= '+') or (C s= '-'))
+            {
+                push [my Elements] Char;
+                append [my Text] C;
+                my End_Position = [Char.End_Position];
+                return 1;
+            }
+        }
+        if (C s= '_')
+        {
+            push [my Elements] Char;
+            append [my Text] C;
+            my End_Position = [Char.End_Position];
+            return 1;
+        }
+        if (([my Text] seq '0') and ([my Base] seq 'dec'))
+        {
+            if ((C s= 'x') or (C s= 'X'))
+            {
+                my Base = 'hex';
+                push [my Elements] Char;
+                append [my Text] C;
+                my End_Position = [Char.End_Position];
+                return 1;
+            }
+            if ((C s= 'o') or (C s= 'O'))
+            {
+                my Base = 'oct';
+                push [my Elements] Char;
+                append [my Text] C;
+                my End_Position = [Char.End_Position];
+                return 1;
+            }
+            if ((C s= 'b') or (C s= 'B'))
+            {
+                my Base = 'bin';
+                push [my Elements] Char;
+                append [my Text] C;
+                my End_Position = [Char.End_Position];
+                return 1;
+            }
+        }
+        if ([my Base] seq 'hex')
+        {
+            if ((Char is a Char_Number) or (contains 'abcdefABCDEF' C))
+            {
+                push [my Elements] Char;
+                append [my Text] C;
+                my End_Position = [Char.End_Position];
+                return 1;
+            }
+            return 0;
+        }
+        if (([my Base] seq 'oct') or ([my Base] seq 'bin'))
+        {
+            if (Char is a Char_Number)
+            {
+                push [my Elements] Char;
+                append [my Text] C;
+                my End_Position = [Char.End_Position];
+                return 1;
+            }
+            return 0;
+        }
+        if (Char is a Char_Number)
+        {
+            push [my Elements] Char;
+            append [my Text] C;
+            my End_Position = [Char.End_Position];
+            return 1;
+        }
+        if ((C s= '.') and (not [my Seen_Dot]) and (not [my Seen_Exp]))
+        {
+            my Seen_Dot = [true];
+            push [my Elements] Char;
+            append [my Text] C;
+            my End_Position = [Char.End_Position];
+            return 1;
+        }
+        if (((C s= 'e') or (C s= 'E')) and (not [my Seen_Exp]))
+        {
+            comment `absorb the exponent marker only when a digit or signed
+            digit follows, so 1else lexes as NUMBER 1 then NAME else`;
+            flag Exp_Valid [false];
+            forgive
+            {
+                if ([Char.Next] is a Char_Number)
+                {
+                    Exp_Valid = [true];
+                }
+                string N [Char.Next Text];
+                if ((N s= '+') or (N s= '-'))
+                {
+                    if ([Char.Next Next] is a Char_Number)
+                    {
+                        Exp_Valid = [true];
+                    }
+                }
+            }
+            if Exp_Valid
+            {
+                my Seen_Exp = [true];
+                my Sign_Ok = [true];
+                push [my Elements] Char;
+                append [my Text] C;
+                my End_Position = [Char.End_Position];
+                return 1;
+            }
+            return 0;
+        }
+        if ((C s= 'j') or (C s= 'J'))
+        {
+            my Done = [true];
+            push [my Elements] Char;
+            append [my Text] C;
+            my End_Position = [Char.End_Position];
+            return 1;
+        }
+        return 0;
+    }
+}
+
+class Py_String is Py_Token
+{
+    comment `opaque interior, single or triple quoted. backslash prevents
+    the following quote from terminating the string even in raw strings,
+    which matches CPython termination rules exactly.`;
+    property flag Open [true];
+    property flag Triple [false];
+    property flag Escaped [false];
+    property string Quote_Char;
+    property integer Opened 1;
+    property integer Run 0;
+    method integer Append_Character [object Char]
+    {
+        return 0 if (not [my Open]);
+        string C [Char.Text];
+        if ((Char is a Char_Line) and (not [my Triple]) and (not [my Escaped]))
+        {
+            comment `unterminated single-quoted string: stop at the newline`;
+            my Open = [false];
+            return 0;
+        }
+        push [my Elements] Char;
+        append [my Text] C;
+        my End_Position = [Char.End_Position];
+        if [my Escaped]
+        {
+            my Escaped = [false];
+            return 1;
+        }
+        if (C s= '\')
+        {
+            my Escaped = [true];
+            return 1;
+        }
+        if [my Triple]
+        {
+            if ([my Opened] < 3)
+            {
+                if (C s= [my Quote_Char])
+                {
+                    increment [my Opened];
+                }
+                return 1;
+            }
+            if (C s= [my Quote_Char])
+            {
+                increment [my Run];
+                if ([my Run] >= 3)
+                {
+                    my Open = [false];
+                }
+                return 1;
+            }
+            my Run = 0;
+            return 1;
+        }
+        if (C s= [my Quote_Char])
+        {
+            my Open = [false];
+        }
+        return 1;
+    }
+}
+
+class Py_Op is Py_Token
+{
+    comment `maximal munch over the python operator set. every multi-char
+    operator has full-token prefixes, except the ellipsis whose .. prefix is
+    handled by one lookahead special case.`;
+    class property string Operators ' + - * ** / // % @ << >> & | ^ ~ < > <= >= == != = += -= *= /= //= %= @= &= |= ^= >>= <<= **= -> := ( ) [ ] { } , : . ... ; ';
+    method integer Append_Character [object Char]
+    {
+        string Cand (append [my Text] [Char.Text]);
+        flag Absorb [false];
+        if (contains [Py_Op:Operators] (append ' ' Cand ' '))
+        {
+            Absorb = [true];
+        }
+        if (Cand seq '..')
+        {
+            forgive
+            {
+                if ([Char.Next Text] s= '.')
+                {
+                    Absorb = [true];
+                }
+            }
+        }
+        if Absorb
+        {
+            push [my Elements] Char;
+            append [my Text] [Char.Text];
+            my End_Position = [Char.End_Position];
+            return 1;
+        }
+        return 0;
+    }
+}
+
+class Py_Comment is Py_Token
+{
+    property flag In_Parens [false];
+    method integer Append_Character [object Char]
+    {
+        return 0 if (Char is a Char_Line);
+        push [my Elements] Char;
+        append [my Text] [Char.Text];
+        my End_Position = [Char.End_Position];
+        return 1;
+    }
+}
+
+class Py_Ws is Py_Token
+{
+    method integer Append_Character [object Char]
+    {
+        return 0 if (not (Char is a Char_Ws));
+        return 0 if (Char is a Char_Line);
+        push [my Elements] Char;
+        append [my Text] [Char.Text];
+        my End_Position = [Char.End_Position];
+        return 1;
+    }
+}
+
+class Py_Linejoin is Py_Token
+{
+    comment `explicit line joining: a backslash followed by a newline`;
+    property flag Open [true];
+    method integer Append_Character [object Char]
+    {
+        return 0 if (not [my Open]);
+        if (Char is a Char_Line)
+        {
+            push [my Elements] Char;
+            append [my Text] [Char.Text];
+            my End_Position = [Char.End_Position];
+            my Open = [false];
+            return 1;
+        }
+        return 0;
+    }
+}
+
+class Py_Newline is Py_Token;
+class Py_Nl is Py_Token;
+class Py_Indent is Py_Token;
+class Py_Dedent is Py_Token;
+class Py_Endmarker is Py_Token;
+
+class set Py_Token
+{
+    class method object Factory [object Char]
+    {
+        object Tok;
+        string C [Char.Text];
+        if (C s= '#')
+        {
+            Tok = (new Py_Comment);
+        }
+        else if ((C s= "'") or (C s= '"'))
+        {
+            Tok = (new Py_String);
+            Tok.Quote_Char = C;
+            forgive
+            {
+                if (([Char.Next Text] s= C) and ([Char.Next Next Text] s= C))
+                {
+                    Tok.Triple = [true];
+                }
+            }
+        }
+        else if (Char is a Char_Number)
+        {
+            Tok = (new Py_Number);
+        }
+        else if (Char is a Char_Ident)
+        {
+            Tok = (new Py_Name);
+        }
+        else if (C s= '\')
+        {
+            flag Joins [false];
+            forgive
+            {
+                if ([Char.Next] is a Char_Line)
+                {
+                    Joins = [true];
+                }
+            }
+            if Joins
+            {
+                Tok = (new Py_Linejoin);
+            }
+            else
+            {
+                Tok = (new Py_Op);
+            }
+        }
+        else if (Char is a Char_Line)
+        {
+            Tok = (new Py_Newline);
+        }
+        else if (Char is a Char_Ws)
+        {
+            Tok = (new Py_Ws);
+        }
+        else if (C s= '.')
+        {
+            flag Dot_Number [false];
+            forgive
+            {
+                if ([Char.Next] is a Char_Number)
+                {
+                    Dot_Number = [true];
+                }
+            }
+            if Dot_Number
+            {
+                Tok = (new Py_Number);
+                Tok.Seen_Dot = [true];
+            }
+            else
+            {
+                Tok = (new Py_Op);
+            }
+        }
+        else
+        {
+            Tok = (new Py_Op);
+        }
+        Tok.Text = C;
+        Tok.Start_Position = [Char.Start_Position];
+        Tok.End_Position = [Char.End_Position];
+        return Tok;
+    }
+}
+
+class Py_Compiler is Compiler
+{
+    property list Trivia;
+    property list Indent_Stack;
+    property integer Paren_Depth 0;
+    property flag At_Line_Start [true];
+    property string Line_Ws '';
+    property string String_Prefixes ' r R b B u U f F rb rB Rb RB br bR Br BR fr fR Fr FR rf rF Rf RF ';
+
+    method number Infer_Tokens
+    {
+        verbosity;
+        comment `pylex lexes through character elements for object lookahead:
+        the standard pipeline no longer builds them, so make sure they exist`;
+        return 0 if ((i Infer_Characters) = 0);
+        object Char;
+        object Current (new Token);
+        integer Status;
+        for each Char in [my Characters]
+        {
+            Status = (Current.Append_Character Char);
+            continue if (Status > 0);
+            i Py_Emit Current;
+            Current = (Py_Token:Factory Char);
+        }
+        i Py_Emit Current;
+        i Py_Finish;
+        return 1;
+    }
+
+    method void Py_Emit [object Tok]
+    {
+        return if (not (Tok is a Py_Token));
+        if (Tok is a Py_Ws)
+        {
+            if [my At_Line_Start]
+            {
+                append [my Line_Ws] [Tok.Text];
+            }
+            push [my Trivia] Tok;
+            return;
+        }
+        if (Tok is a Py_Comment)
+        {
+            if ([my Paren_Depth] > 0)
+            {
+                Tok.In_Parens = [true];
+            }
+            push [my Trivia] Tok;
+            return;
+        }
+        if (Tok is a Py_Linejoin)
+        {
+            push [my Trivia] Tok;
+            return;
+        }
+        if (Tok is a Py_Newline)
+        {
+            if (([my Paren_Depth] > 0) or [my At_Line_Start])
+            {
+                comment `implicitly joined or blank line: non-logical newline`;
+                object NL (new Py_Nl);
+                NL.Text = [Tok.Text];
+                NL.Start_Position = [Tok.Start_Position];
+                NL.End_Position = [Tok.End_Position];
+                push [my Trivia] NL;
+                if [my At_Line_Start]
+                {
+                    my Line_Ws = '';
+                }
+                return;
+            }
+            push [my Tokens] Tok;
+            my At_Line_Start = [true];
+            my Line_Ws = '';
+            return;
+        }
+        if [my At_Line_Start]
+        {
+            i Py_Apply_Indent [Tok.Start_Position];
+            my At_Line_Start = [false];
+            my Line_Ws = '';
+        }
+        if (Tok is a Py_Op)
+        {
+            string T [Tok.Text];
+            if ((T s= '(') or (T s= '[') or (T s= '{'))
+            {
+                increment [my Paren_Depth];
+            }
+            if ((T s= ')') or (T s= ']') or (T s= '}'))
+            {
+                if ([my Paren_Depth] > 0)
+                {
+                    my Paren_Depth = ([my Paren_Depth] - 1);
+                }
+            }
+        }
+        if (Tok is a Py_String)
+        {
+            i Py_Merge_Prefix Tok;
+        }
+        push [my Tokens] Tok;
+    }
+
+    method integer Py_Column [string Ws]
+    {
+        integer Col 0;
+        integer L ((length Ws) - 1);
+        integer N;
+        string C;
+        for N range 0 L
+        {
+            C = (substring Ws N 1);
+            if (C s= [tab])
+            {
+                Col = (Col + (8 - (Col mod 8)));
+            }
+            else
+            {
+                increment Col;
+            }
+        }
+        return Col;
+    }
+
+    method void Py_Apply_Indent [integer Pos]
+    {
+        integer Col (i Py_Column [my Line_Ws]);
+        integer Top 0;
+        if ((llength [my Indent_Stack]) > 0)
+        {
+            Top = (llast [my Indent_Stack]);
+        }
+        if (Col > Top)
+        {
+            push [my Indent_Stack] Col;
+            object T (new Py_Indent);
+            T.Text = [my Line_Ws];
+            T.Start_Position = (Pos - (length [my Line_Ws]));
+            T.End_Position = (Pos - 1);
+            push [my Tokens] T;
+            return;
+        }
+        forever
+        {
+            break if ((llength [my Indent_Stack]) = 0);
+            Top = (llast [my Indent_Stack]);
+            break if (Top <= Col);
+            object Popped (pop [my Indent_Stack]);
+            object D (new Py_Dedent);
+            D.Text = '';
+            D.Start_Position = Pos;
+            D.End_Position = Pos;
+            push [my Tokens] D;
+        }
+    }
+
+    method void Py_Merge_Prefix [object Tok]
+    {
+        comment `a string prefix like r b f rb lexes first as a NAME; when the
+        quote follows it with no gap, fold the name into the string token`;
+        return if ((llength [my Tokens]) = 0);
+        object Prev (llast [my Tokens]);
+        return if (not (Prev is a Py_Name));
+        return if (([Prev.End_Position] + 1) != [Tok.Start_Position]);
+        string P [Prev.Text];
+        return if (not (contains [my String_Prefixes] (append ' ' P ' ')));
+        object Popped (pop [my Tokens]);
+        Tok.Text = (append P [Tok.Text]);
+        Tok.Start_Position = [Prev.Start_Position];
+    }
+
+    method void Py_Finish
+    {
+        integer Pos 0;
+        if ((llength [my Characters]) > 0)
+        {
+            object LC (llast [my Characters]);
+            Pos = ([LC.End_Position] + 1);
+        }
+        if (not [my At_Line_Start])
+        {
+            object NL (new Py_Newline);
+            NL.Text = [line];
+            NL.Start_Position = Pos;
+            NL.End_Position = Pos;
+            push [my Tokens] NL;
+            my At_Line_Start = [true];
+        }
+        forever
+        {
+            break if ((llength [my Indent_Stack]) = 0);
+            object Popped (pop [my Indent_Stack]);
+            object D (new Py_Dedent);
+            D.Text = '';
+            D.Start_Position = Pos;
+            D.End_Position = Pos;
+            push [my Tokens] D;
+        }
+        object E (new Py_Endmarker);
+        E.Text = '';
+        E.Start_Position = Pos;
+        E.End_Position = Pos;
+        push [my Tokens] E;
+    }
+
+    method string Token_Report
+    {
+        comment `significant tokens and trivia merged by position, one per
+        line, for comparison against the CPython tokenize oracle`;
+        string Out '';
+        integer A 0;
+        integer B 0;
+        integer LA (llength [my Tokens]);
+        integer LB (llength [my Trivia]);
+        object T;
+        flag Use_A;
+        forever
+        {
+            break if ((A >= LA) and (B >= LB));
+            Use_A = [true];
+            if (A >= LA)
+            {
+                Use_A = [false];
+            }
+            else if (B < LB)
+            {
+                object TA (lget [my Tokens] A);
+                object TB (lget [my Trivia] B);
+                if ([TB.Start_Position] < [TA.Start_Position])
+                {
+                    Use_A = [false];
+                }
+            }
+            if Use_A
+            {
+                T = (lget [my Tokens] A);
+                increment A;
+            }
+            else
+            {
+                T = (lget [my Trivia] B);
+                increment B;
+            }
+            string Text [T.Text];
+            replace Text '\' '\\';
+            replace Text [tab] '\t';
+            replace Text [line] '\n';
+            append Out [class name T] [tab] Text [line];
+        }
+        return Out;
+    }
+
+    method number Tokenize
+    {
+        return 0 if ((i Infer_Text) = 0);
+        return 0 if ((i Infer_Characters) = 0);
+        return 0 if ((i Infer_Tokens) = 0);
+        return 1;
+    }
+}

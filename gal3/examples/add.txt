@@ -1,0 +1,13 @@
+class Add
+{
+    method number Sum [number A, number B]
+    {
+        return (A + B);
+    }
+}
+
+main
+{
+    object A = (new Add);
+    say "Sum of 3 and 5: " (A.Sum 3 5);
+}

@@ -1,0 +1,58 @@
+#!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Rebuild the pygal (python-to-gal translator) artifact through the GAL3 chain (required: the generated
+# python parser needs gal3's memoization and left-recursion support).
+# pygal = lexer + generated parser + parse support + python-to-gal translator + main.
+# python_parser.txt must exist (python ~/.gal3/peg.py grammars/python-3.11.gram python_parser.txt)
+
+source "$(dirname "$(readlink -f "$0")")/../galenv" || exit 1
+
+BUILD="${GAL_BUILD:-$GAL_HOME/gal3build}"
+BIN="$HOME/.gal3"
+mkdir -p "$BUILD" "$BIN"
+
+cp compiler_base.txt compiler_dialect.txt attributes_inference.txt structure_inference.txt data_type_inference.txt inheritance_inference.txt llm_inference.txt py_base.txt pyparse_base.txt python_parser.txt pygal_base.txt pygal_main.txt "$BUILD"/ || exit 1
+
+function gal3stage
+{
+    local TF=/tmp/pygal_stage.out
+    rm -f "$TF"
+    echo "        $1 $2 '-->' $3"
+    python "$BIN/$1" "$2" "$TF"
+    if [ ! -f "$TF" ]; then
+        echo "$1 failed creating $3. aborting"
+        exit 1
+    fi
+    mv "$TF" "$3"
+    rm -f "$TF.elems" 2>/dev/null
+}
+
+echo "">"$BUILD/zero.txt"
+cat "$BUILD/compiler_base.txt" "$BUILD/compiler_dialect.txt" "$BUILD/attributes_inference.txt" "$BUILD/structure_inference.txt" "$BUILD/data_type_inference.txt" "$BUILD/inheritance_inference.txt" "$BUILD/llm_inference.txt" >> "$BUILD/zero.txt"
+
+echo "">"$BUILD/pygal.txt"
+cat "$BUILD/zero.txt" "$BUILD/py_base.txt" "$BUILD/pyparse_base.txt" "$BUILD/python_parser.txt" "$BUILD/pygal_base.txt" "$BUILD/pygal_main.txt" >> "$BUILD/pygal.txt"
+
+echo "module Compiler {">"$BUILD/pygal.tx2"
+cat "$BUILD/pygal.txt">>"$BUILD/pygal.tx2"
+echo "}">>"$BUILD/pygal.tx2"
+
+gal3stage gal.py "$BUILD/pygal.tx2" "$BUILD/pygal.gal"
+
+FALLBACK="$BUILD/pygal.fallback"
+cp "$BUILD/pygal.gal" "$FALLBACK"
+rm -f "$BUILD"/pygal.fb* &> /dev/null
+for (( COUNTER=0; COUNTER<6; COUNTER++)); do
+    TEMP="$BUILD/pygal.fb$COUNTER"
+    gal3stage fallback.py "$FALLBACK" "$TEMP"
+    if cmp -s "$FALLBACK" "$TEMP"; then
+        echo "    files are equal!"
+        break
+    fi
+    FALLBACK="$TEMP"
+done
+cp "$FALLBACK" "$BUILD/pygal.atomic"
+
+gal3stage galpy.py "$BUILD/pygal.atomic" "$BUILD/pygal.py"
+cp "$BUILD/pygal.py" "$BIN/pygal.py"
+echo "pygal build complete: $BIN/pygal.py"

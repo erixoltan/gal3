@@ -1,0 +1,118 @@
+#!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# webbuild — build the browser edition of the gal3 compiler.
+#
+# Two artifacts, both compiled with the _33 fixpoint binaries (no full
+# loop needed: javascript_inference.txt is galjs-stack-only, and the two
+# mains are new files):
+#
+#   galjsb_33.py — the browser-emitting JS backend (galjs stack with
+#                  javascript_browser_main, which drives
+#                  Javascript_Browser_Compiler);
+#   galweb.js    — the web bundle: front end + fallback + python + js
+#                  backends + web_main dispatcher in ONE script (one
+#                  script tag, no cross-script class collisions),
+#                  compiled to browser JS by galjsb_33.
+#
+# The bundle exposes globalThis.Gal_Main(Stage, Source, Target) and the
+# Gal_Files Map as its virtual file system. It also runs under node
+# (globalThis and Map exist there), which is how it gets tested.
+
+source "$(dirname "$(readlink -f "$0")")/../galenv" || exit 1
+
+SRC="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+BUILD="${GAL_BUILD:-$GAL_HOME/gal3build}"
+BIN="$HOME/.gal3"
+mkdir -p "$BUILD" "$BIN"
+
+# Discipline guard, same as galjsbuild: every shared source must match
+# the copy the last full loop consumed.
+SHARED="compiler_base compiler_dialect attributes_inference structure_inference data_type_inference inheritance_inference llm_inference gal_base fallback_inference python_inference"
+for f in $SHARED; do
+    if ! cmp -s "$SRC/$f.txt" "$BUILD/$f.txt"; then
+        echo "webbuild: shared source $f.txt differs from the last full loop."
+        echo "run ./build && ./selfbuild && ./selfself first."
+        exit 1
+    fi
+done
+
+cp "$SRC/javascript_inference.txt" "$SRC/javascript_browser_main.txt" "$SRC/web_main.txt" "$BUILD"/ || exit 1
+
+echo "">"$BUILD/zero.txt"
+cat "$BUILD/compiler_base.txt" "$BUILD/compiler_dialect.txt" \
+    "$BUILD/attributes_inference.txt" "$BUILD/structure_inference.txt" \
+    "$BUILD/data_type_inference.txt" "$BUILD/inheritance_inference.txt" "$BUILD/llm_inference.txt" >> "$BUILD/zero.txt"
+
+function run33
+{
+    rm -f "$3"
+    echo "        $1 $2 '-->' $3"
+    python "$BIN/$1.py" "$2" "$3"
+    if [ ! -f "$3" ]; then
+        echo "webbuild: $1 did not create $3. aborting"
+        exit 1
+    fi
+}
+
+function pipeline
+{
+    # pipeline <name>: $BUILD/<name>.txt -> tx2 -> gal -> atomic
+    echo "module Compiler {">"$BUILD/$1.tx2"
+    cat "$BUILD/$1.txt">>"$BUILD/$1.tx2"
+    echo "}">>"$BUILD/$1.tx2"
+    run33 gal_33 "$BUILD/$1.tx2" "$BUILD/$1.gal"
+    local FALLBACK="$BUILD/$1.fallback"
+    cp "$BUILD/$1.gal" "$FALLBACK"
+    rm -f "$BUILD/$1".fb* &> /dev/null
+    for (( COUNTER=0; COUNTER<5; COUNTER++)); do
+        local TEMP="$BUILD/$1.fb$COUNTER"
+        run33 fallback_33 "$FALLBACK" "$TEMP"
+        if cmp -s "$FALLBACK" "$TEMP"; then
+            echo "    files are equal!"
+            break
+        fi
+        FALLBACK="$TEMP"
+    done
+    cp "$FALLBACK" "$BUILD/$1.atomic"
+}
+
+# ---- galjsb_33: the browser-emitting backend (python edition) ---------
+echo "">"$BUILD/galjsb_33.txt"
+cat "$BUILD/zero.txt" "$BUILD/gal_base.txt" "$BUILD/fallback_inference.txt" \
+    "$BUILD/javascript_inference.txt" "$BUILD/llm_inference.txt" \
+    "$BUILD/javascript_browser_main.txt" >> "$BUILD/galjsb_33.txt"
+pipeline galjsb_33
+run33 galpy_33 "$BUILD/galjsb_33.atomic" "$BUILD/galjsb_33.py"
+cp "$BUILD/galjsb_33.py" "$BIN/galjsb_33.py"
+
+# ---- galweb: the browser bundle ---------------------------------------
+echo "">"$BUILD/galweb.txt"
+cat "$BUILD/zero.txt" "$BUILD/gal_base.txt" "$BUILD/fallback_inference.txt" \
+    "$BUILD/python_inference.txt" "$BUILD/javascript_inference.txt" \
+    "$BUILD/llm_inference.txt" "$BUILD/web_main.txt" >> "$BUILD/galweb.txt"
+pipeline galweb
+run33 galjsb_33 "$BUILD/galweb.atomic" "$BUILD/galweb.js"
+node --check "$BUILD/galweb.js" || { echo "webbuild: galweb.js failed node --check"; exit 1; }
+
+# browser hygiene: the bundle must LOAD in a context with no require and
+# no process (the generator sources it contains legitimately mention them
+# in string literals, so a grep would false-positive; execution is the
+# real test)
+node -e '
+const vm = require("vm");
+const src = require("fs").readFileSync(process.argv[1], "utf8");
+const ctx = vm.createContext({ console });
+try {
+    vm.runInContext(src, ctx, { filename: "galweb.js" });
+    if (typeof vm.runInContext("globalThis.Gal_Main", ctx) !== "function") {
+        console.error("galweb.js loaded but exported no Gal_Main");
+        process.exit(1);
+    }
+    console.log("browser-context load: clean, Gal_Main exported");
+} catch (e) {
+    console.error("browser-context load FAILED:", e.message);
+    process.exit(1);
+}' "$BUILD/galweb.js" || exit 1
+
+cp "$BUILD/galweb.js" "$BIN/galweb.js"
+echo "webbuild complete: $BIN/galweb.js ($(wc -c < "$BUILD/galweb.js") bytes)"

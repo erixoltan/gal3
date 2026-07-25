@@ -1,0 +1,71 @@
+# SPDX-License-Identifier: Apache-2.0
+# galenv - shared Python environment bootstrap for the whole gal toolchain.
+#
+# SOURCE this file (do not execute it) from the top of any build script:
+#
+#     source "$(dirname "$(readlink -f "$0")")/galenv"        # from repo root
+#     source "$(dirname "$(readlink -f "$0")")/../galenv"     # from gal2/, gal3/
+#     source "$(dirname "$(readlink -f "$0")")/../../galenv"  # from gal1/compiler/
+#
+# It guarantees a single uv-managed virtual environment at the toolchain root
+# and puts it on PATH, so every bare `python` / `python3` call in the existing
+# build scripts runs the locked interpreter and dependencies instead of the
+# host's system Python. This is what makes the toolchain reproducible across
+# machines and immune to PEP 668 "externally-managed" pip breakage.
+
+# Resolve the toolchain root = the directory that contains this file.
+if [ -n "${BASH_SOURCE[0]:-}" ]; then
+    GAL_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+else
+    GAL_HOME="${GAL_HOME:-$(pwd)}"
+fi
+export GAL_HOME
+
+# _gal_activate: prepend the venv to PATH (idempotent) and mark it active.
+_gal_activate() {
+    export VIRTUAL_ENV="$GAL_HOME/.venv"
+    case ":$PATH:" in
+        *":$GAL_HOME/.venv/bin:"*) ;;
+        *) PATH="$GAL_HOME/.venv/bin:$PATH" ;;
+    esac
+    # The go toolchain (user-local install) for the galgo target.
+    if [ -d "$HOME/.local/go/bin" ]; then
+        case ":$PATH:" in
+            *":$HOME/.local/go/bin:"*) ;;
+            *) PATH="$PATH:$HOME/.local/go/bin" ;;
+        esac
+    fi
+    export PATH
+    export GAL_ENV_READY=1
+}
+
+# Fast path: a parent build script already synced this process tree. Children
+# inherit GAL_ENV_READY, so they just re-assert PATH and skip uv entirely.
+if [ -n "${GAL_ENV_READY:-}" ] && [ -x "$GAL_HOME/.venv/bin/python" ]; then
+    _gal_activate
+    unset -f _gal_activate
+    return 0 2>/dev/null || exit 0
+fi
+
+# uv is the single prerequisite. It is one static binary; install it once per
+# machine and nothing else is needed (it fetches the pinned Python itself).
+if ! command -v uv >/dev/null 2>&1; then
+    echo "galenv: 'uv' not found. Install it once per machine with:" >&2
+    echo "    curl -LsSf https://astral.sh/uv/install.sh | sh" >&2
+    return 1 2>/dev/null || exit 1
+fi
+
+# Sync the shared venv from pyproject.toml + uv.lock. uv is offline and
+# near-instant when already up to date; it only does work when the lock or a
+# dependency changed. `uv sync` also downloads the Python pinned in
+# .python-version, so the host distro's python is never touched.
+if [ ! -x "$GAL_HOME/.venv/bin/python" ]; then
+    echo "galenv: creating shared venv at $GAL_HOME/.venv ..." >&2
+fi
+( cd "$GAL_HOME" && uv sync --quiet ) || {
+    echo "galenv: 'uv sync' failed" >&2
+    return 1 2>/dev/null || exit 1
+}
+
+_gal_activate
+unset -f _gal_activate

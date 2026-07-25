@@ -1,0 +1,267 @@
+# Structure Inference Test Cases
+
+This document defines test cases for validating the `Infer_Structure` method in the gal3 compiler.
+
+## Test Case 1: Basic Parent-Child Relationships
+
+### Input
+```gal
+class Simple
+{
+    property string Name;
+    
+    constructor [string N]
+    {
+        my Name = N;
+    }
+}
+```
+
+### Expected Structure
+- class Simple
+  - Parent: null (top-level)
+  - Parent_Class: null (no class context)
+  - Parent_Method: null (no method context)
+  - property Name
+    - Parent: Simple
+    - Parent_Class: Simple
+  - constructor
+    - Parent: Simple
+    - Parent_Class: Simple
+    - Parent_Method: self
+    - block
+      - Parent: constructor
+      - Parent_Class: Simple
+      - Parent_Method: constructor
+      - statement (my Name = N)
+        - Parent: block
+        - Parent_Class: Simple
+        - Parent_Method: constructor
+
+## Test Case 2: Nested Classes
+
+### Input
+```gal
+class Outer
+{
+    class Inner
+    {
+        method void Test
+        {
+            console "test";
+        }
+    }
+}
+```
+
+### Expected Structure
+- class Outer
+  - Parent: null
+  - Parent_Class: null
+  - block
+    - Parent: Outer
+    - Parent_Class: Outer
+    - class Inner
+      - Parent: block
+      - Parent_Class: Outer
+      - Parent_Method: null
+      - block
+        - Parent: Inner
+        - Parent_Class: Inner
+        - method Test
+          - Parent: block
+          - Parent_Class: Inner
+          - Parent_Method: self
+          - block
+            - Parent: method Test
+            - Parent_Class: Inner
+            - Parent_Method: method Test
+            - statement (console)
+              - Parent: block
+              - Parent_Class: Inner
+              - Parent_Method: method Test
+
+## Test Case 3: If-Else Relationships
+
+### Input
+```gal
+if (X > 0)
+{
+    console "positive";
+}
+else if (X < 0)
+{
+    console "negative";
+}
+else
+{
+    console "zero";
+}
+```
+
+### Expected Structure
+- statement if
+  - Parent: (depends on context)
+  - If_Statement: null (it's the parent if)
+  - Else_Statements: [else if, else]
+  - block
+    - Parent: if
+    - statement console
+      - Parent: block
+- statement else if
+  - Parent: (depends on context)
+  - If_Statement: statement if (linked to parent)
+  - block
+    - Parent: else if
+    - statement console
+      - Parent: block
+- statement else
+  - Parent: (depends on context)
+  - If_Statement: statement if (linked to parent)
+  - block
+    - Parent: else
+    - statement console
+      - Parent: block
+
+## Test Case 4: Try-Catch Relationships
+
+### Input
+```gal
+try
+{
+    console "trying";
+}
+catch
+{
+    console "caught error";
+}
+```
+
+### Expected Structure
+- statement try
+  - Parent: (depends on context)
+  - Catch_Statements: [catch]
+  - block
+    - Parent: try
+    - statement console
+      - Parent: block
+- statement catch
+  - Parent: (depends on context)
+  - Try_Statement: statement try (linked to parent)
+  - block
+    - Parent: catch
+    - statement console
+      - Parent: block
+
+## Test Case 5: Complex Nesting with Multiple Contexts
+
+### Input
+```gal
+class Container
+{
+    method void Process [integer Value]
+    {
+        if (Value > 0)
+        {
+            class Helper
+            {
+                method integer Calculate
+                {
+                    return Value * 2;
+                }
+            }
+            
+            object H = (new Helper);
+            integer Result = (H.Calculate);
+            console Result;
+        }
+    }
+}
+```
+
+### Expected Structure
+- class Container
+  - Parent_Class: self
+  - method Process
+    - Parent: Container
+    - Parent_Class: Container
+    - Parent_Method: self
+    - block
+      - Parent: Process
+      - Parent_Class: Container
+      - Parent_Method: Process
+      - statement if
+        - Parent: block
+        - Parent_Class: Container
+        - Parent_Method: Process
+        - block
+          - Parent: if
+          - Parent_Class: Container
+          - Parent_Method: Process
+          - class Helper
+            - Parent: block
+            - Parent_Class: Container
+            - Parent_Method: Process
+            - method Calculate
+              - Parent: Helper
+              - Parent_Class: Helper
+              - Parent_Method: self
+          - statement (object H)
+            - Parent: block
+            - Parent_Class: Container
+            - Parent_Method: Process
+          - statement (integer Result)
+            - Parent: block
+            - Parent_Class: Container
+            - Parent_Method: Process
+          - statement (console)
+            - Parent: block
+            - Parent_Class: Container
+            - Parent_Method: Process
+
+## Test Case 6: Edge Case - Empty Constructs
+
+### Input
+```gal
+class Empty
+{
+}
+
+method void EmptyMethod
+{
+}
+
+if (X)
+{
+}
+else
+{
+}
+```
+
+### Expected Structure
+Verify that empty blocks still have proper parent-child relationships established.
+
+## Validation Procedure
+
+For each test case:
+
+1. Parse the input code
+2. Run the `Infer_Structure` method
+3. Verify that each element has the correct Parent, Parent_Class, and Parent_Method properties
+4. For if-else and try-catch, verify the relationships are correctly established
+5. Test the recursive context methods (Get_Innermost_Class, Get_Innermost_Method, Get_Innermost_Module)
+
+## Performance Metrics
+
+- Measure time taken for structure inference
+- Count number of elements processed
+- Calculate elements processed per second
+- Track memory usage during inference
+
+## Gratitude Metrics
+
+- Record accuracy of structure inference
+- Track which inferences are most challenging (requiring LLM assistance)
+- Measure which implementation patterns are most efficient
+- Determine which context establishment patterns deserve the most "gratitude" for optimization

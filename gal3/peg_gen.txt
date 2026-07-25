@@ -1,0 +1,618 @@
+flowerbox 'grammar to gal generator: walk the peg parse tree and emit parser Python';
+
+comment `
+Turns the parse tree of a pegen grammar file into gal parser DSL source:
+a parser Python block (sequence and either rules), one element class per
+sequence rule, and hand-emitted lookahead methods in a class set on the
+generated parser class. The core transform is rule lifting: every nested
+group, optional group, gather and multi-alternative body is hoisted into a
+synthetic named rule, because gal rules reference only names and literals.
+
+Erasures that preserve recognition semantics: actions and type annotations
+are dropped; cut and forced degrade to nothing / plain match (they only
+affect error reporting); invalid_ rules and alternatives that reference
+them are filtered out (pegen uses them only in its error second pass).
+`;
+
+class Galgen is Element
+{
+    property string Rules '';
+    property string Classes '';
+    property string Methods '';
+    property integer Synth_N 0;
+    property string Current_Rule '';
+    property dictionary Token_Map;
+
+    constructor
+    {
+        [my Token_Map] 'NAME' d= 'Py_Name';
+        [my Token_Map] 'NUMBER' d= 'Py_Number';
+        [my Token_Map] 'STRING' d= 'Py_String';
+        [my Token_Map] 'NEWLINE' d= 'Py_Newline';
+        [my Token_Map] 'INDENT' d= 'Py_Indent';
+        [my Token_Map] 'DEDENT' d= 'Py_Dedent';
+        [my Token_Map] 'ENDMARKER' d= 'Py_Endmarker';
+        [my Token_Map] 'TYPE_COMMENT' d= 'Py_Type_Comment';
+        [my Token_Map] 'ASYNC' d= "'async'";
+        [my Token_Map] 'AWAIT' d= "'await'";
+    }
+
+    method string Synth_Name [string Kind]
+    {
+        increment [my Synth_N];
+        string Name [my Current_Rule];
+        append Name '_' Kind (string [my Synth_N]);
+        return Name;
+    }
+
+    method void Add_Sequence [string Name, string Items]
+    {
+        append [my Rules] [indent] 'sequence ' Name [line] Items [indent, indent] ';' [line];
+    }
+
+    method void Add_Class [string Name, string Ancestor]
+    {
+        comment `class declarations are emitted by the caller before any
+        interior synthetics are lifted, so a synthetic inheriting its rule
+        class never precedes that class in the generated source`;
+        append [my Classes] 'class ' Name ' is ' Ancestor ';' [line];
+    }
+
+    method void Add_Either [string Name, string Items]
+    {
+        append [my Rules] [indent] 'either ' Name [line] Items [indent, indent] ';' [line];
+    }
+
+    method void Add_Lookahead [string Name, string Target, flag Positive]
+    {
+        string Call '(i Parse_' Target ' LA_Scratch)';
+        string Q (substring Target 0 1);
+        if ((Q s= "'") or (Q s= '"'))
+        {
+            Call = (append '(i Parse_Token LA_Scratch ' Target ')');
+        }
+        string Result 'LA_Result';
+        if (not Positive)
+        {
+            Result = '(not LA_Result)';
+        }
+        append [my Methods]
+            [indent] 'method flag Parse_' Name ' [list Parent_Elements]' [line]
+            [indent] '{' [line]
+            [indent, indent] 'integer LA_Token [my Token_Pos];' [line]
+            [indent, indent] 'integer LA_Char [my Char_Pos];' [line]
+            [indent, indent] 'list LA_Scratch;' [line]
+            [indent, indent] 'flag LA_Result ' Call ';' [line]
+            [indent, indent] 'my Token_Pos = LA_Token;' [line]
+            [indent, indent] 'my Char_Pos = LA_Char;' [line]
+            [indent, indent] 'return ' Result ';' [line]
+            [indent] '}' [line];
+    }
+
+    method flag Scan_Invalid [object E]
+    {
+        if (E is a Peg_Name)
+        {
+            string T [E.Text];
+            if ((substring T 0 8) s= 'invalid_')
+            {
+                return [true];
+            }
+            return [false];
+        }
+        return [false] if (E is a Token);
+        forgive
+        {
+            object Child;
+            for each Child in [E.Elements]
+            {
+                if (i Scan_Invalid Child)
+                {
+                    return [true];
+                }
+            }
+        }
+        return [false];
+    }
+
+    method string Lift_Alternatives [list Alts, string Name]
+    {
+        comment `emit one rule named Name covering the given alternatives and
+        return that name. one alternative becomes a sequence; several become
+        an either whose complex arms are hoisted into synthetic sequences.`;
+        list Kept;
+        object Alt;
+        for each Alt in Alts
+        {
+            continue if (i Scan_Invalid Alt);
+            push Kept Alt;
+        }
+        if ((llength Kept) = 0)
+        {
+            say 'WARNING: rule ' Name ' has no valid alternatives';
+            return Name;
+        }
+        if ((llength Kept) = 1)
+        {
+            object Only (lget Kept 0);
+            string Items (Only.Gen_Items [self]);
+            i Add_Sequence Name Items;
+            return Name;
+        }
+        string Arms '';
+        for each Alt in Kept
+        {
+            string Arm (Alt.Gen_Use [self] Name);
+            append Arms [indent, indent] Arm [line];
+        }
+        i Add_Either Name Arms;
+        return Name;
+    }
+
+    method string Assemble
+    {
+        comment `methods are emitted inside the parser block: the parser
+        statement copies every member statement into the generated class body,
+        which sidesteps class set targeting a class that only exists in
+        generated output`;
+        string Out 'flowerbox `generated by peg_gen from the python grammar - DO NOT EDIT`;' [line 2];
+        append Out 'parser Python' [line] '{' [line];
+        append Out [indent] 'tokens' [line]
+            [indent, indent] 'Py_Number' [line]
+            [indent, indent] 'Py_String' [line]
+            [indent, indent] 'Py_Newline' [line]
+            [indent, indent] 'Py_Indent' [line]
+            [indent, indent] 'Py_Dedent' [line]
+            [indent, indent] 'Py_Endmarker' [line]
+            [indent, indent] 'Py_Type_Comment' [line]
+            [indent, indent] ';' [line];
+        append Out (i Name_Method);
+        append Out [my Rules];
+        append Out [my Methods];
+        append Out '}' [line 2];
+        append Out [my Classes] [line];
+        return Out;
+    }
+
+    method string Name_Method
+    {
+        comment `pegen NAME tokens must not match reserved keywords, which a
+        plain token class check cannot express, so the NAME parse method is
+        emitted by hand instead of through the tokens statement`;
+        string M '';
+        append M [indent] 'class property string Py_Keywords ';
+        append M "' False None True and as assert async await break class continue def del elif else except finally for from global if import in is lambda nonlocal not or pass raise return while with yield ';" [line];
+        append M [indent] 'method flag Parse_Py_Name [list Parent_Elements]' [line]
+            [indent] '{' [line]
+            [indent, indent] 'object Top_Token (i Top_Token);' [line]
+            [indent, indent] 'return [false] if (Top_Token is null);' [line]
+            [indent, indent] 'if (not (Top_Token is a Py_Name))' [line]
+            [indent, indent] '{' [line]
+            [indent, indent, indent] "Top_Token.Error = 'Expected Py_Name';" [line]
+            [indent, indent, indent] 'return [false];' [line]
+            [indent, indent] '}' [line]
+            [indent, indent] 'string T [Top_Token.Text];' [line]
+            [indent, indent] 'if (contains [Python_Parser:Py_Keywords] (append " " T " "))' [line]
+            [indent, indent] '{' [line]
+            [indent, indent, indent] 'return [false];' [line]
+            [indent, indent] '}' [line]
+            [indent, indent] 'push Parent_Elements Top_Token;' [line]
+            [indent, indent] 'Top_Token.Error = [null];' [line]
+            [indent, indent] 'i Consume_Token;' [line]
+            [indent, indent] 'return [true];' [line]
+            [indent] '}' [line];
+        return M;
+    }
+}
+
+class set Peg_Grammar
+{
+    method void Gen_Grammar [object G]
+    {
+        object Child;
+        for each Child in [my Elements]
+        {
+            if (Child is a Peg_Rule)
+            {
+                Child.Gen_Rule G;
+            }
+        }
+    }
+}
+
+class set Peg_Rule
+{
+    method void Gen_Rule [object G]
+    {
+        object Header [null];
+        object Body [null];
+        object Child;
+        for each Child in [my Elements]
+        {
+            if (Child is a Peg_Rule_Header)
+            {
+                Header = Child;
+            }
+            if (Child is a Peg_Rule_Body)
+            {
+                Body = Child;
+            }
+        }
+        return if (Header is null);
+        return if (Body is null);
+        string Rule_Name '';
+        for each Child in [Header.Elements]
+        {
+            if (Child is a Peg_Name)
+            {
+                Rule_Name = [Child.Text];
+                break;
+            }
+        }
+        return if (Rule_Name seq '');
+        if ((substring Rule_Name 0 8) s= 'invalid_')
+        {
+            return;
+        }
+        G.Current_Rule = (append 'Python_' Rule_Name);
+        G.Add_Class [G.Current_Rule] 'Py_Rule';
+        list Alts;
+        Body.Collect_Alts Alts;
+        string Ignored (G.Lift_Alternatives Alts [G.Current_Rule]);
+    }
+}
+
+class set Peg_Rule_Body
+{
+    method void Collect_Alts [list Out]
+    {
+        object Child;
+        for each Child in [my Elements]
+        {
+            if (Child is a Peg_Alt_List)
+            {
+                Child.Collect_Alts Out;
+            }
+            if (Child is a Peg_Alt_Line)
+            {
+                Child.Collect_Alts Out;
+            }
+        }
+    }
+}
+
+class set Peg_Alt_Line
+{
+    method void Collect_Alts [list Out]
+    {
+        object Child;
+        for each Child in [my Elements]
+        {
+            if (Child is a Peg_Alt_List)
+            {
+                Child.Collect_Alts Out;
+            }
+        }
+    }
+}
+
+class set Peg_Alt_List
+{
+    method void Collect_Alts [list Out]
+    {
+        object Child;
+        for each Child in [my Elements]
+        {
+            if (Child is a Peg_Alternative)
+            {
+                push Out Child;
+            }
+            if (Child is a Peg_Alt_Tail)
+            {
+                object Sub;
+                for each Sub in [Child.Elements]
+                {
+                    if (Sub is a Peg_Alternative)
+                    {
+                        push Out Sub;
+                    }
+                }
+            }
+        }
+    }
+}
+
+class set Peg_Alternative
+{
+    method string Gen_Items [object G]
+    {
+        comment `the item lines of a sequence rule, one per line`;
+        string Items '';
+        object Child;
+        for each Child in [my Elements]
+        {
+            continue if (Child is a Peg_Action);
+            continue if (Child is a Token);
+            string Item (Child.Gen_Item G);
+            continue if (Item seq '');
+            append Items [indent, indent] Item [line];
+        }
+        return Items;
+    }
+
+    method string Gen_Use [object G, string Base]
+    {
+        comment `an either arm: a plain name or literal can be used directly,
+        anything else is hoisted into a synthetic sequence inheriting the
+        rule's abstract base class`;
+        integer Count 0;
+        object Only [null];
+        object Child;
+        for each Child in [my Elements]
+        {
+            continue if (Child is a Peg_Action);
+            continue if (Child is a Token);
+            increment Count;
+            Only = Child;
+        }
+        if (Count = 1)
+        {
+            string Item (Only.Gen_Item G);
+            string First (substring Item 0 1);
+            if ((First sne '[') and (Item sgt ''))
+            {
+                return Item;
+            }
+        }
+        string Name (G.Synth_Name 'A');
+        G.Add_Class Name Base;
+        string Items (i Gen_Items G);
+        G.Add_Sequence Name Items;
+        return Name;
+    }
+}
+
+class set Peg_Named_Item
+{
+    method string Gen_Item [object G]
+    {
+        comment `x=e and x[T]=e: the capture name is ignored for recognition`;
+        object Child;
+        object Value [null];
+        for each Child in [my Elements]
+        {
+            if (Child is a Peg_Gather)
+            {
+                Value = Child;
+            }
+            if (Child is a Peg_Postfix_Item)
+            {
+                Value = Child;
+            }
+        }
+        return '' if (Value is null);
+        return (Value.Gen_Item G);
+    }
+}
+
+class set Peg_Postfix_Item
+{
+    method string Gen_Item [object G]
+    {
+        object Atom [null];
+        string Postfix '';
+        object Child;
+        for each Child in [my Elements]
+        {
+            if (Child is a Peg_Op)
+            {
+                Postfix = [Child.Text];
+            }
+            else
+            {
+                Atom = Child;
+            }
+        }
+        return '' if (Atom is null);
+        if (Atom is a Peg_Optional_Group)
+        {
+            if (Postfix sgt '')
+            {
+                say 'WARNING: postfix on optional group is not supported';
+            }
+            return (Atom.Gen_Item G);
+        }
+        string Base (Atom.Gen_Atom G);
+        if (Postfix seq '')
+        {
+            return Base;
+        }
+        if (Postfix seq '?')
+        {
+            return (append '[optional ' Base ']');
+        }
+        if (Postfix seq '*')
+        {
+            return (append '[optrep ' Base ']');
+        }
+        if (Postfix seq '+')
+        {
+            return (append '[repeating ' Base ']');
+        }
+        say 'WARNING: unknown postfix ' Postfix;
+        return Base;
+    }
+}
+
+class set Peg_Gather
+{
+    method string Gen_Item [object G]
+    {
+        comment `sep.e+ is e followed by zero or more (sep e) pairs`;
+        list Atoms;
+        object Child;
+        for each Child in [my Elements]
+        {
+            continue if (Child is a Peg_Op);
+            push Atoms Child;
+        }
+        if ((llength Atoms) < 2)
+        {
+            say 'WARNING: malformed gather';
+            return '';
+        }
+        object Sep (lget Atoms 0);
+        object Elem (lget Atoms 1);
+        string Sep_Text (Sep.Gen_Atom G);
+        string Elem_Text (Elem.Gen_Atom G);
+        string Name (G.Synth_Name 'G');
+        string Tail_Name (append Name '_T');
+        string Tail_Items '';
+        append Tail_Items [indent, indent] Sep_Text [line];
+        append Tail_Items [indent, indent] Elem_Text [line];
+        G.Add_Class Tail_Name [G.Current_Rule];
+        G.Add_Sequence Tail_Name Tail_Items;
+        string Items '';
+        append Items [indent, indent] Elem_Text [line];
+        append Items [indent, indent] '[optrep ' Tail_Name ']' [line];
+        G.Add_Class Name [G.Current_Rule];
+        G.Add_Sequence Name Items;
+        return Name;
+    }
+}
+
+class set Peg_Group
+{
+    method string Gen_Atom [object G]
+    {
+        object Child;
+        list Alts;
+        for each Child in [my Elements]
+        {
+            if (Child is a Peg_Alt_List)
+            {
+                Child.Collect_Alts Alts;
+            }
+        }
+        string Name (G.Synth_Name 'P');
+        G.Add_Class Name [G.Current_Rule];
+        return (G.Lift_Alternatives Alts Name);
+    }
+    method string Gen_Item [object G]
+    {
+        return (i Gen_Atom G);
+    }
+}
+
+class set Peg_Optional_Group
+{
+    method string Gen_Item [object G]
+    {
+        object Child;
+        list Alts;
+        for each Child in [my Elements]
+        {
+            if (Child is a Peg_Alt_List)
+            {
+                Child.Collect_Alts Alts;
+            }
+        }
+        string Name (G.Synth_Name 'O');
+        G.Add_Class Name [G.Current_Rule];
+        string Inner (G.Lift_Alternatives Alts Name);
+        return (append '[optional ' Inner ']');
+    }
+}
+
+class set Peg_Name
+{
+    method string Gen_Atom [object G]
+    {
+        string T [my Text];
+        if (dexists [G.Token_Map] T)
+        {
+            return (dget [G.Token_Map] T);
+        }
+        return (append 'Python_' T);
+    }
+}
+
+class set Peg_String
+{
+    method string Gen_Atom [object G]
+    {
+        return (G.Enquote [my Unquoted]);
+    }
+}
+
+class set Peg_Triple_String
+{
+    method string Gen_Atom [object G]
+    {
+        return (G.Enquote [my Unquoted]);
+    }
+}
+
+class set Peg_Lookahead_Positive
+{
+    method string Gen_Item [object G]
+    {
+        object Child;
+        object Atom [null];
+        for each Child in [my Elements]
+        {
+            continue if (Child is a Peg_Op);
+            Atom = Child;
+        }
+        return '' if (Atom is null);
+        string Target (Atom.Gen_Atom G);
+        string Name (G.Synth_Name 'La');
+        G.Add_Lookahead Name Target [true];
+        return Name;
+    }
+}
+
+class set Peg_Lookahead_Negative
+{
+    method string Gen_Item [object G]
+    {
+        object Child;
+        object Atom [null];
+        for each Child in [my Elements]
+        {
+            continue if (Child is a Peg_Op);
+            Atom = Child;
+        }
+        return '' if (Atom is null);
+        string Target (Atom.Gen_Atom G);
+        string Name (G.Synth_Name 'Ln');
+        G.Add_Lookahead Name Target [false];
+        return Name;
+    }
+}
+
+class set Peg_Forced
+{
+    method string Gen_Item [object G]
+    {
+        comment `forced tokens only affect error reporting: plain match`;
+        object Child;
+        object Atom [null];
+        for each Child in [my Elements]
+        {
+            continue if (Child is a Peg_Op);
+            Atom = Child;
+        }
+        return '' if (Atom is null);
+        return (Atom.Gen_Atom G);
+    }
+}
+
+class set Peg_Cut
+{
+    method string Gen_Item [object G]
+    {
+        comment `cut only affects backtracking bounds and error reporting`;
+        return '';
+    }
+}

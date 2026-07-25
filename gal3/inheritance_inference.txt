@@ -1,0 +1,182 @@
+comment 'start of inheritance inference';
+
+flowerbox 'inheritance inference: compile-time flattening of class hierarchies';
+
+comment `
+Ported from gal2 (Inherit in gal2/src/Language.gal, driver in
+Intelligence.gal), per docs/mumps_design.md. Every class statement gains
+Compiled_* member tables with inheritance already applied: ancestor
+tables merge first, own members last, so overrides resolve during the
+merge and a generator never needs to walk a hierarchy. The flattening
+serves targets without a compatible inheritance model (MUMPS routines,
+C) and gives typed backends precomputed member tables.
+
+The pass fills the Infer_Inheritance stage that has waited in the
+compiler pipeline as a stub, and is behavior-neutral until a generator
+consumes the tables. By the time it runs, class sets have merged into
+their primary classes (Appended_Statements, during Infer_Appends) and
+every class is registered by name in the Statement_Class Names registry
+(during Infer_Attributes), so declaration order never matters.
+
+Dialect-declared classes (statement, operation, syntax declarations)
+register in the same Names registry but carry no Ancestor property, so
+they flatten as roots for now; extend Inheritance_Name and the ancestor
+probe when a consumer needs their generated ancestry flattened too.
+`;
+
+class set Class_Statement
+{
+    property flag Inheritance_Compiled [false];
+    property dictionary Compiled_Ancestors;
+    property dictionary Compiled_Class_Properties;
+    property dictionary Compiled_Class_Methods;
+    property dictionary Compiled_Properties;
+    property dictionary Compiled_Methods;
+    property object Compiled_Constructor [null];
+
+    method void Inherit_Member [object S]
+    {
+        comment `files one member statement into the flattened tables;
+        the specific class-member kinds test before their bases`;
+        object C [S.Classification];
+        string MN '';
+        forgive
+        {
+            MN = ([C.Name].Get_Input);
+        }
+        if (C is a Statement_Constructor)
+        {
+            my Compiled_Constructor = C;
+        }
+        else if (C is a Statement_Class_Property)
+        {
+            if (MN sgt '')
+            {
+                [my Compiled_Class_Properties] MN d= C;
+            }
+        }
+        else if (C is a Statement_Class_Method)
+        {
+            if (MN sgt '')
+            {
+                [my Compiled_Class_Methods] MN d= C;
+            }
+        }
+        else if (C is a Property_Statement)
+        {
+            if (MN sgt '')
+            {
+                [my Compiled_Properties] MN d= C;
+            }
+        }
+        else if (C is a Method_Statement)
+        {
+            if (MN sgt '')
+            {
+                [my Compiled_Methods] MN d= C;
+            }
+        }
+    }
+
+    method flag Inherit
+    {
+        if [my Inheritance_Compiled]
+        {
+            return 1;
+        }
+        comment `the flag sets before the ancestor recursion, so a cyclic
+        hierarchy terminates with partial tables instead of recursing
+        forever`;
+        my Inheritance_Compiled = [true];
+        forgive
+        {
+            string AN ([my Ancestor].Get_Input);
+            if ((AN sgt '') and (dexists [Statement_Class:Names] AN))
+            {
+                object S2 = (dget [Statement_Class:Names] AN);
+                S2.Inherit;
+                [my Compiled_Ancestors] AN d= S2;
+                string N2;
+                object Stmt;
+                iterate [S2.Compiled_Ancestors] N2 Stmt
+                {
+                    [my Compiled_Ancestors] N2 d= Stmt;
+                }
+                iterate [S2.Compiled_Class_Properties] N2 Stmt
+                {
+                    [my Compiled_Class_Properties] N2 d= Stmt;
+                }
+                iterate [S2.Compiled_Class_Methods] N2 Stmt
+                {
+                    [my Compiled_Class_Methods] N2 d= Stmt;
+                }
+                iterate [S2.Compiled_Properties] N2 Stmt
+                {
+                    [my Compiled_Properties] N2 d= Stmt;
+                }
+                iterate [S2.Compiled_Methods] N2 Stmt
+                {
+                    [my Compiled_Methods] N2 d= Stmt;
+                }
+                forgive
+                {
+                    if (not ([S2.Compiled_Constructor] is null))
+                    {
+                        my Compiled_Constructor = [S2.Compiled_Constructor];
+                    }
+                }
+            }
+        }
+        object S;
+        forgive
+        {
+            for each S in [my Block Statements]
+            {
+                forgive
+                {
+                    i Inherit_Member S;
+                }
+            }
+        }
+        forgive
+        {
+            for each S in [my Appended_Statements]
+            {
+                forgive
+                {
+                    i Inherit_Member S;
+                }
+            }
+        }
+        return 1;
+    }
+}
+
+inference Inheritance
+{
+    handle Compiler
+    {
+        verbosity;
+        object E;
+        object C;
+        for each E in [my Elements]
+        {
+            forgive
+            {
+                C = [E.Classification];
+                if (C is a Class_Statement)
+                {
+                    C.Inherit;
+                }
+            }
+        }
+        return 1;
+    }
+
+    handle Element
+    {
+        return 1;
+    }
+}
+
+comment 'end of inheritance inference';

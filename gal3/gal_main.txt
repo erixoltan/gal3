@@ -1,0 +1,28 @@
+flowerbox 'gal main';
+main [string Source_File, string Target_File]
+{
+    verbosity;
+    verbose 'gal3 compiler';
+    verbose 'input file: ' Source_File;
+    object C = (new Gal_Compiler);
+    C.Initialize;
+    C.File_Name = Source_File;
+    C.Code = '<undefined>';
+    number Result = (C.Infer);
+    string Report ([C.Dialect].Print_Unclassified_Verbs);
+    if (Report sgt '')
+    {
+        say Report;
+    }
+    if (Result > 0)
+    {
+        # `verbose 'code ' [C.Gal];`;
+        write [C.Gal] to Target_File;
+        verbose 'gal target file ' Target_File;
+    }
+    else
+    {
+        write (C.Element_Report) to (Target_File s+ '.elems');
+        say "ERROR, output not written";
+    }
+}

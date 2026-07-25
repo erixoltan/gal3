@@ -1,0 +1,46 @@
+parser Gal_Token
+{
+    tokens
+        Character
+        Char_Number
+        Char_Punct
+        Char_Line
+        Char_Ident
+        ;
+    either Token
+        Token_Line
+        Token_Ws
+        Token_Quote
+        Token_Number
+        Token_Punct
+        Token_Comma
+        Token_Word
+        Character
+        ;
+    sequence Token_Comma
+        Character_Comma
+        ;
+    sequence Token_Number
+        [optional '-']
+        [repeating Char_Number]
+        [optional "."]
+        [optrep Char_Number]
+        ;
+    sequence Token_Punct
+        Char_Punct
+        ;
+    sequence Token_Line
+        Char_Line
+        ;
+    sequence Token_Ws
+        [repeating Ws]
+        ;
+    either Ws
+        ' '
+        [tab]
+        Token_Line
+        ;
+    sequence Token_Word
+        [repeating Char_Ident]
+        ;
+}

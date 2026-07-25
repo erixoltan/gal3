@@ -1,0 +1,119 @@
+
+comment 'start of attributes inference';
+
+class set Element
+{
+    method void Attributes;
+}
+
+inference Attributes
+{
+    handle Element
+    {
+        return 1;
+    }
+    handle Class_Statement
+    {
+        string Name ([my Class_Name].Get_Input);
+        [Statement_Class:Names] Name d= [me];
+        return 1;
+    }
+    handle Derived_Class_Statement
+    {
+        comment `a dialect, parser or symbol is class-like and registers
+        under its name, but it must never displace a genuine class of the
+        same name. the compiler stack declares both 'class Compiler' and
+        'dialect Compiler'; the dialect is declared later, so it took the
+        name - and 'class set Compiler' then spliced its members into the
+        dialect, where nothing emits them. they vanished from the atomic
+        and from every artifact, silently. python tolerated the loss
+        because the only caller is verbose-guarded; a static host does
+        not`;
+        string Name ([my Name].Get_Input);
+        if (dexists [Statement_Class:Names] Name)
+        {
+            object Existing (dget [Statement_Class:Names] Name);
+            if (not (Existing is a Derived_Class_Statement))
+            {
+                return 1;
+            }
+        }
+        [Statement_Class:Names] Name d= [me];
+        return 1;
+    }
+    handle Statement_Statement
+    {
+        string Name 'Statement_' ([my Class_Name].Get_Input);
+        [Statement_Class:Names] Name d= [me];
+        return 1;
+    }
+    handle Statement_Operation
+    {
+        string Name 'Operation_' ([my Class_Name].Get_Input);
+        [Statement_Class:Names] Name d= [me];
+        return 1;
+    }
+    handle Statement_Syntax
+    {
+        string Name 'Syntax_' ([my Class_Name].Get_Input);
+        [Statement_Class:Names] Name d= [me];
+        return 1;
+    }
+    handle Statement_Class_Set
+    {
+        return 1;
+    }
+    handle Sideways_Class_Statement
+    {
+        return 1;
+    }
+    handle Statement_Return_If
+    {
+        undefined [my Condition]
+        {
+            my Condition = [my Value];
+            my Value = [null];
+        }
+    }
+    handle Compiler
+    {
+        verbosity [true];
+        object E;
+        for each E in [my Elements]
+        {
+            try
+            {
+                [E.Classification].Attributes;
+                [E.Classification].Infer_Attributes;
+            }
+            catch Err
+            {
+                debug;
+                object C = [E.Classification];
+                if (! C) {
+                    C = E;
+                }
+                string Class_Name [class C name];
+                say 'Error: '
+                    Err
+                    ', inferring '
+                    Class_Name
+                    ' attributes, position '
+                    [E.Start_Position]
+                    '-'
+                    [E.End_Position];
+                verbose [indent]
+                    'input: ' (E.Get_Input)
+                    [line]
+                    ([E.Classification].To_String);
+                verbose [line];
+            }
+        }
+        comment `an explicit success: python's fall-off None passed the
+        caller's = 0 check only by accident, and a static host cannot
+        return None`;
+        return 1;
+    }
+}
+
+comment 'end of attributes inference';

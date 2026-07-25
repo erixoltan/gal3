@@ -1,0 +1,22 @@
+flowerbox 'python parser main: parse a python source file into elements and dump the tree';
+main [string Source_File, string Target_File]
+{
+    verbosity;
+    verbose 'python parser';
+    verbose 'input file: ' Source_File;
+    object C = (new Py_Parse_Compiler);
+    C.File_Name = Source_File;
+    number Result = (C.Parse_Python);
+    if ((llength [C.Elements]) > 0)
+    {
+        write (C.Element_Report) to Target_File;
+    }
+    if (Result > 0)
+    {
+        say 'pyparse OK, tree written to ' Target_File;
+    }
+    else
+    {
+        say 'pyparse FAILED';
+    }
+}

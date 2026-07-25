@@ -1,0 +1,338 @@
+#!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+
+echo "building gal3 compiler"
+
+# Activate the shared uv-managed Python environment for the whole toolchain.
+# This makes the bare `python` calls below run the locked interpreter + deps.
+source "$(dirname "$(readlink -f "$0")")/../galenv" || exit 1
+
+BUILD="${GAL_BUILD:-$GAL_HOME/gal3build}"
+mkdir -p "$BUILD"
+BIN="$HOME/.gal3"
+mkdir -p "$BIN"
+rm -f -r "$BIN"/*
+SANDBOX="${GAL_SANDBOX:-$BUILD/sandbox}"
+mkdir -p "$SANDBOX"
+cp bin/Runtime.py "$BIN"/
+cp bin/Runtime.py "$SANDBOX"/
+cp bin/pdebug.py "$BIN"/
+cp bin/pdebug.py "$SANDBOX"/
+cp bin/zdebug.py "$BIN"/
+cp bin/zdebug.py "$SANDBOX"/
+
+function append
+{
+#     echo append $1 to $2
+    cat "$BUILD/$1.txt" >> "$BUILD/$2.txt"
+}
+
+function new
+{
+    echo "">"$BUILD/$1.txt"
+}
+
+function gal2
+{
+    rm -f "$3"
+    echo "        gal2 $2 '-->' $1 $3"
+    python ~/.goalspell/goalspell gs $1 "$2" "$3" < /dev/null
+    if [ ! -f "$3" ]
+    then
+        echo "did not create $3. aborting"
+        exit 1
+    fi
+}
+
+function atomic
+{
+    local GALFILE="$BUILD/$1.gal"
+    local FALLBACK="$BUILD/$1.fallback"
+    local ATOMIC="$BUILD/$1.atomic"
+    local SANDTOMIC="$SANDBOX/$1.atomic"
+    local MAX_ITERATIONS=5  # Limit iterations to prevent infinite loops
+    echo "    atomic $GALFILE -> $FALLBACK -> $ATOMIC"
+    # use gal file as first fallback version.
+    cp "$GALFILE" "$FALLBACK"
+    # Create a working copy for iterations
+    rm -f "$BUILD/$1.fb*" &> /dev/null
+    local COUNTER=0
+    for (( ; $COUNTER<$MAX_ITERATIONS; COUNTER++)); do
+        local TEMP="$BUILD/$1.fb$COUNTER"
+        gal2 fb "$FALLBACK" "$TEMP"
+        if [ ! -f "$TEMP" ]; then
+            echo "    no file $TEMP!"
+            break
+        fi
+        if cmp -s "$FALLBACK" "$TEMP"; then
+            echo "    files are equal!"
+            break
+        fi
+        FALLBACK="$TEMP"
+    done
+    echo "    copy $FALLBACK to $ATOMIC"
+    cp "$FALLBACK" "$ATOMIC"
+    cp "$ATOMIC" "$SANDTOMIC"
+}
+
+
+function compile
+{
+    echo "Compiling $1..."
+    echo "module Compiler {">"$BUILD/$1.tx2"
+    cat "$BUILD/$1.txt">>"$BUILD/$1.tx2"
+    echo "}">>"$BUILD/$1.tx2"
+    gal2 gs "$BUILD/$1.tx2" "$BUILD/$1.gal"
+
+#     echo "Starting atomic conversion for $1..."
+    if ! atomic "$1"; then
+        echo "ERROR: Atomic conversion failed for $1"
+        return 1
+    fi
+
+#     echo "Generating Python output for $1..."
+    gal2 py "$BUILD/$1.atomic" "$BUILD/$1.py"
+    cp "$BUILD/$1.py" "$BIN/$1.py"
+
+    # echo "Generating JavaScript output for $1..."
+    # gal2 js "$BUILD/$1.atomic" "$BUILD/$1.js"
+    # cp "$BUILD/$1.js" "$BIN/$1.js"
+
+#     echo "Compilation of $1 completed successfully"
+}
+
+# The per-artifact compiles are independent; run them concurrently and fail
+# the build if any job fails or leaves its binary missing. Each job logs to
+# $BUILD/<artifact>.buildlog so interleaved output stays readable.
+JOB_PIDS=()
+JOB_NAMES=()
+
+function compile_bg
+{
+    compile "$1" > "$BUILD/$1.buildlog" 2>&1 &
+    JOB_PIDS+=($!)
+    JOB_NAMES+=("$1")
+    echo "Compiling $1 (parallel, log: $BUILD/$1.buildlog)..."
+}
+
+function wait_jobs
+{
+    local FAIL=0
+    local i
+    for i in "${!JOB_PIDS[@]}"; do
+        local NAME="${JOB_NAMES[$i]}"
+        if ! wait "${JOB_PIDS[$i]}" || [ ! -f "$BIN/$NAME.py" ]; then
+            echo "ERROR: compile of $NAME failed. Log tail:"
+            tail -30 "$BUILD/$NAME.buildlog"
+            FAIL=1
+        else
+            echo "    $NAME ok"
+        fi
+    done
+    JOB_PIDS=()
+    JOB_NAMES=()
+    if [ $FAIL = 1 ]; then
+        echo "build failed"
+        exit 1
+    fi
+}
+
+cp *.txt $BUILD/
+cp bin/Runtime.py ~/.gal3/
+
+new zero
+append compiler_base zero
+append compiler_dialect zero
+append attributes_inference zero
+append structure_inference zero
+append data_type_inference zero
+append inheritance_inference zero
+append llm_inference zero
+
+new compiler
+append zero compiler
+append compiler_main compiler
+#compile compiler
+
+new gal
+append zero gal
+append gal_base gal
+append gal_main gal
+compile_bg gal
+
+new fallback
+append zero fallback
+append gal_base fallback
+append fallback_inference fallback
+append llm_inference fallback
+append fallback_main fallback
+compile_bg fallback
+
+new galpy
+append zero galpy
+append gal_base galpy
+append fallback_inference galpy
+append python_inference galpy
+append llm_inference galpy
+append python_main galpy
+compile_bg galpy
+
+new galc
+append zero galc
+append gal_base galc
+append fallback_inference galc
+append c_inference galc
+append llm_inference galc
+append c_main galc
+compile_bg galc
+
+new galmumps
+append zero galmumps
+append gal_base galmumps
+append fallback_inference galmumps
+append mumps_inference galmumps
+append llm_inference galmumps
+append mumps_main galmumps
+compile_bg galmumps
+
+new galjs
+append zero galjs
+append gal_base galjs
+append fallback_inference galjs
+append javascript_inference galjs
+append llm_inference galjs
+append javascript_main galjs
+compile_bg galjs
+
+new galgo
+append zero galgo
+append gal_base galgo
+append fallback_inference galgo
+append go_inference galgo
+append llm_inference galgo
+append go_main galgo
+compile_bg galgo
+
+new galjava
+append zero galjava
+append gal_base galjava
+append fallback_inference galjava
+append java_inference galjava
+append llm_inference galjava
+append java_main galjava
+compile_bg galjava
+
+new galcpp
+append zero galcpp
+append gal_base galcpp
+append fallback_inference galcpp
+append cpp_inference galcpp
+append llm_inference galcpp
+append cpp_main galcpp
+compile_bg galcpp
+
+new peg
+append zero peg
+append peg_base peg
+append peg_gen peg
+append peg_main peg
+compile_bg peg
+
+new pylex
+append zero pylex
+append py_base pylex
+append py_main pylex
+compile_bg pylex
+
+wait_jobs
+
+echo "generating python parser from the python grammar"
+python "$BIN/peg.py" grammars/python-3.11.gram python_parser.txt
+if [ ! -f python_parser.txt ]; then
+    echo "peg generation of python_parser.txt failed. aborting"
+    exit 1
+fi
+cp python_parser.txt "$BUILD"/
+
+# pyparse must be compiled by the GAL3 chain: memoization and left-recursion
+# support live in gal3's parser generators, and python.gram is left-recursive.
+function compile3
+{
+    echo "Compiling $1 (gal3 chain)..."
+    echo "module Compiler {">"$BUILD/$1.tx2"
+    cat "$BUILD/$1.txt">>"$BUILD/$1.tx2"
+    echo "}">>"$BUILD/$1.tx2"
+    local TF="$BUILD/$1.stage.tmp"
+    rm -f "$TF"
+    python "$BIN/gal.py" "$BUILD/$1.tx2" "$TF" < /dev/null || true
+    if [ ! -f "$TF" ]; then echo "gal3 gal stage failed for $1"; exit 1; fi
+    mv "$TF" "$BUILD/$1.gal"
+    local FB="$BUILD/$1.fallback"
+    cp "$BUILD/$1.gal" "$FB"
+    rm -f "$BUILD"/$1.fb* &> /dev/null
+    local C=0
+    for (( ; C<6; C++)); do
+        rm -f "$TF"
+        python "$BIN/fallback.py" "$FB" "$TF" < /dev/null || true
+        if [ ! -f "$TF" ]; then echo "gal3 fallback stage failed for $1"; exit 1; fi
+        mv "$TF" "$BUILD/$1.fb$C"
+        if cmp -s "$FB" "$BUILD/$1.fb$C"; then
+            echo "    files are equal!"
+            break
+        fi
+        FB="$BUILD/$1.fb$C"
+    done
+    cp "$FB" "$BUILD/$1.atomic"
+    rm -f "$TF"
+    python "$BIN/galpy.py" "$BUILD/$1.atomic" "$TF" < /dev/null || true
+    if [ ! -f "$TF" ]; then echo "gal3 galpy stage failed for $1"; exit 1; fi
+    mv "$TF" "$BUILD/$1.py"
+    cp "$BUILD/$1.py" "$BIN/$1.py"
+}
+
+function compile3_bg
+{
+    compile3 "$1" > "$BUILD/$1.buildlog" 2>&1 &
+    JOB_PIDS+=($!)
+    JOB_NAMES+=("$1")
+    echo "Compiling $1 (gal3 chain, parallel, log: $BUILD/$1.buildlog)..."
+}
+
+new pyparse
+append zero pyparse
+append py_base pyparse
+append pyparse_base pyparse
+append python_parser pyparse
+append pyparse_main pyparse
+compile3_bg pyparse
+
+new pygen
+append zero pygen
+append py_base pygen
+append pyparse_base pygen
+append python_parser pygen
+append pygen_base pygen
+append pygen_main pygen
+compile3_bg pygen
+
+new pygal
+append zero pygal
+append py_base pygal
+append pyparse_base pygal
+append python_parser pygal
+append pygal_base pygal
+append pygal_main pygal
+compile3_bg pygal
+
+wait_jobs
+
+# new nsl
+# append zero nsl
+# append nsl_base nsl
+# append nsl_main nsl
+# compile nsl
+
+# ls -1 "$BIN"/*.py
+# ls -1 "$BIN"/*.js
+
+echo "gal3 compiler build complete"
