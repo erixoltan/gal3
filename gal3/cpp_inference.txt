@@ -975,6 +975,59 @@ generator Cpp Fallback
         (i Cpp_Infix [my Op1] [my Op2] ' || ');
     generate Operation_Not
         '(!' [my Op1 Cpp] ')';
+    generate Statement_Emit
+    {
+        comment `say without the trailing newline`;
+        i Cpp_Include 'iostream';
+        string Code '';
+        string Between '';
+        string Plain '';
+        object Arg;
+        for each Arg in [my Arguments]
+        {
+            object AC [Arg.Classification];
+            string U '<none>';
+            forgive
+            {
+                string U2 [AC.Unquoted];
+                if (not (U2 is an Element))
+                {
+                    U = U2;
+                }
+            }
+            if (U sne '<none>')
+            {
+                append Plain U;
+            }
+            else
+            {
+                if (Plain sgt '')
+                {
+                    append Code Between (i Cpp_Quote Plain);
+                    Between = ' << ';
+                    Plain = '';
+                }
+                append Code Between [Arg.Cpp];
+                Between = ' << ';
+            }
+        }
+        if (Plain sgt '')
+        {
+            append Code Between (i Cpp_Quote Plain);
+        }
+        i = (append 'std::cout << ' Code ';');
+    }
+    generate Operation_Ordinal
+        '(int) (unsigned char) (' Op1 ')[0]';
+    generate Operation_Character
+        'std::string(1, (char) (' Op1 '))';
+    generate Operation_Integer
+        '(long long) (' (i Cpp_Numeric_Operand [my Op1]) ')';
+    generate Operation_Power
+    {
+        i Cpp_Include 'cmath';
+        i = (append 'std::pow((double) (' (i Cpp_Numeric_Operand [my Op1]) '), (double) (' (i Cpp_Numeric_Operand [my Op2]) '))');
+    }
 }
 
 class Cpp_Compiler is Fallback_Compiler

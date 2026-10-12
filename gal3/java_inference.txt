@@ -3924,6 +3924,16 @@ generator Java Fallback
         }
         i = Code;
     }
+    generate Statement_Emit
+        'System.out.print(' (i Java_Append [my Arguments]) ');';
+    generate Operation_Ordinal
+        '(int) ' ([my Op1].Java_String) '.charAt(0)';
+    generate Operation_Character
+        'java.lang.String.valueOf((char) (' Op1 '))';
+    generate Operation_Integer
+        '(int) (' (i Java_Numeric_Operand [my Op1]) ')';
+    generate Operation_Power
+        'Math.pow(' (i Java_Numeric_Operand [my Op1]) ', ' (i Java_Numeric_Operand [my Op2]) ')';
 }
 
 class Java_Compiler is Fallback_Compiler

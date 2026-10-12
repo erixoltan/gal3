@@ -527,7 +527,7 @@ generator Javascript Fallback
         append Helper [line] [indent] 'while (true) {';
         append Helper [line] [indent] [indent] 'var N;';
         append Helper [line] [indent] [indent] 'try { N = fs.readSync(0, Buf, 0, 1); } catch (E) { if (E.code === "EAGAIN") continue; throw E; }';
-        append Helper [line] [indent] [indent] 'if (N === 0) break;';
+        append Helper [line] [indent] [indent] 'if (N === 0) { if (Bytes.length === 0) throw new Error("EOFError: end of input"); break; }';
         append Helper [line] [indent] [indent] 'if (Buf[0] === 10) break;';
         append Helper [line] [indent] [indent] 'Bytes.push(Buf[0]);';
         append Helper [line] [indent] '}';
@@ -1660,6 +1660,24 @@ generator Javascript Fallback
     }
     generate Statement_List_Clear
         List '.length = 0;';
+    generate Statement_Emit
+    {
+        comment `a browser page has no stdout: emit degrades to console.log there`;
+        if (i Javascript_Browser)
+        {
+            i = (append 'console.log(' (i Javascript_Append [my Arguments]) ');');
+            return;
+        }
+        i = (append 'process.stdout.write(globalThis.String(' (i Javascript_Append [my Arguments]) '));');
+    }
+    generate Operation_Ordinal
+        '(' ([my Op1].Javascript_String) ').charCodeAt(0)';
+    generate Operation_Character
+        'globalThis.String.fromCharCode(' Op1 ')';
+    generate Operation_Integer
+        'Math.trunc(' (i Javascript_Numeric_Operand [my Op1]) ')';
+    generate Operation_Power
+        'Math.pow(' (i Javascript_Numeric_Operand [my Op1]) ', ' (i Javascript_Numeric_Operand [my Op2]) ')';
 }
 
 class Javascript_Compiler is Fallback_Compiler

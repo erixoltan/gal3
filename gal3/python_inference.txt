@@ -1595,7 +1595,7 @@ generator Python Fallback
         i = Code;
     }
     generate Statement_File_Read
-        "with open(" File_Name ", 'r', encoding='utf-8') as _file:" [line] [indent]
+        "with open(" File_Name ", 'r', encoding='utf-8', errors='surrogateescape') as _file:" [line] [indent]
              Variable " = _file.read()";
     generate Statement_Shell_Capture
     {
@@ -1651,10 +1651,20 @@ generator Python Fallback
         i = Code;
     }
     generate Statement_Write_To
-        "with open(" File ", 'w', encoding='utf-8') as _file:" [line] [indent]
+        "with open(" File ", 'w', encoding='utf-8', errors='surrogateescape') as _file:" [line] [indent]
             '_file.write(' Text ')';
     generate Statement_List_Clear
         List '.clear()';
+    generate Statement_Emit
+        'print(' (i Python_Append [my Arguments]) ', end="")';
+    generate Operation_Ordinal
+        'ord((' ([my Op1].Python_String) ')[0])';
+    generate Operation_Character
+        'chr(' Op1 ')';
+    generate Operation_Integer
+        'int(' (i Python_Numeric_Operand [my Op1]) ')';
+    generate Operation_Power
+        '(' (i Python_Numeric_Operand [my Op1]) ') ** (' (i Python_Numeric_Operand [my Op2]) ')';
 }
 
 class Python_Compiler is Fallback_Compiler

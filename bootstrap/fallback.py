@@ -1857,7 +1857,7 @@ class Document(Element):
             print(f'infer text: { FN }')
         T = ''
         if os.path.exists(FN):
-            with open(FN, 'r', encoding='utf-8') as _file:
+            with open(FN, 'r', encoding='utf-8', errors='surrogateescape') as _file:
                 T = _file.read()
             self.Text = T
             if Verbose:
@@ -1867,7 +1867,7 @@ class Document(Element):
             raise Exception(f'no such file { FN }')
         return 0
     def Write_Text(self):
-        with open(self.File_Name, 'w', encoding='utf-8') as _file:
+        with open(self.File_Name, 'w', encoding='utf-8', errors='surrogateescape') as _file:
             _file.write(self.Text)
         return 1
 
@@ -5244,6 +5244,14 @@ class Statement_Say(Append_Args_Statement):
         self.Argument_Types('string')
         return 1
 
+class Statement_Emit(Append_Args_Statement):
+    def __init__(self):
+        super().__init__()
+        self.Keyword = 'emit' # string
+    # ENGLISH: write the arguments to standard output without a trailing newline.
+    def Attributes(self):
+        return 1
+
 class Statement_Readline(Append_Args_Statement):
     def __init__(self):
         super().__init__()
@@ -5780,7 +5788,7 @@ class Statement_Include(Line_Statement):
         if not os.path.exists(FN):
             raise Exception(f'include: no such file { FN }')
         T = ''
-        with open(FN, 'r', encoding='utf-8') as _file:
+        with open(FN, 'r', encoding='utf-8', errors='surrogateescape') as _file:
             T = _file.read()
         self.Gal = T
     def Infer_Fallback(self):
@@ -6305,6 +6313,59 @@ class Operation_Integer(Unary_Operation):
         self.Keyword = 'integer' # string
         self.Op1 = None # object
         self.Data_Type = 'integer' # string
+    def Attributes(self):
+        if len(self.Listargs) == 0:
+            raise Exception('missing required argument Op1')
+        self.Op1 = self.Listargs.pop(0)
+        self.Op1.Value = 'integer'
+        self.Op1.Usage = 'value'
+        return 1
+
+class Operation_Power(Binary_Operation):
+    def __init__(self):
+        super().__init__()
+        self.Keyword = 'pow' # string
+        self.Op1 = None # object
+        self.Op2 = None # object
+        self.Python_Precedence = 2 # integer
+        self.Javascript_Precedence = 2 # integer
+        self.Data_Type = 'number' # string
+    # ENGLISH: the first operand raised to the power of the second, in floating point.
+    def Attributes(self):
+        if len(self.Listargs) == 0:
+            raise Exception('missing required argument Op1')
+        self.Op1 = self.Listargs.pop(0)
+        self.Op1.Value = 'number'
+        self.Op1.Usage = 'value'
+        if len(self.Listargs) == 0:
+            raise Exception('missing required argument Op2')
+        self.Op2 = self.Listargs.pop(0)
+        self.Op2.Value = 'number'
+        self.Op2.Usage = 'value'
+        return 1
+
+class Operation_Ordinal(Unary_Operation):
+    def __init__(self):
+        super().__init__()
+        self.Keyword = 'ord' # string
+        self.Op1 = None # object
+        self.Data_Type = 'integer' # string
+    # ENGLISH: the character code of the first character of a string.
+    def Attributes(self):
+        if len(self.Listargs) == 0:
+            raise Exception('missing required argument Op1')
+        self.Op1 = self.Listargs.pop(0)
+        self.Op1.Value = 'string'
+        self.Op1.Usage = 'value'
+        return 1
+
+class Operation_Character(Unary_Operation):
+    def __init__(self):
+        super().__init__()
+        self.Keyword = 'chr' # string
+        self.Op1 = None # object
+        self.Data_Type = 'string' # string
+    # ENGLISH: the one-character string with the given character code.
     def Attributes(self):
         if len(self.Listargs) == 0:
             raise Exception('missing required argument Op1')
@@ -7724,6 +7785,12 @@ class Dialect_Compiler(Dialect):
         self.Add_Keywords('replace')
         self.Statements['replace with'] = Element
         self.Add_Keywords('replace with')
+        Element = Statement_Emit()
+        self.Elements.extend([Element])
+        self.Statements['emit'] = Element
+        self.Add_Keywords('emit')
+        self.Statements['write part'] = Element
+        self.Add_Keywords('write part')
         Element = Statement_Say()
         self.Elements.extend([Element])
         self.Statements['say'] = Element
@@ -7926,6 +7993,18 @@ class Dialect_Compiler(Dialect):
         self.Add_Keywords('integer')
         self.Operations['int'] = Element
         self.Add_Keywords('int')
+        Element = Operation_Power()
+        self.Elements.extend([Element])
+        self.Operations['pow'] = Element
+        self.Add_Keywords('pow')
+        Element = Operation_Ordinal()
+        self.Elements.extend([Element])
+        self.Operations['ord'] = Element
+        self.Add_Keywords('ord')
+        Element = Operation_Character()
+        self.Elements.extend([Element])
+        self.Operations['chr'] = Element
+        self.Add_Keywords('chr')
         Element = Operation_Is_A()
         self.Elements.extend([Element])
         self.Operations['is a'] = Element
@@ -9553,10 +9632,10 @@ if __name__ == '__main__':
     if Unclassified > '':
         print(Unclassified)
     if Result > 0:
-        with open(Target_File, 'w', encoding='utf-8') as _file:
+        with open(Target_File, 'w', encoding='utf-8', errors='surrogateescape') as _file:
             _file.write(FC.Fallback)
     else:
-        with open(Report_File, 'w', encoding='utf-8') as _file:
+        with open(Report_File, 'w', encoding='utf-8', errors='surrogateescape') as _file:
             _file.write(FC.Element_Report())
         if Verbose:
             print(f'wrote { Report_File }')

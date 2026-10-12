@@ -971,6 +971,60 @@ generator Go Fallback
         (i Go_Infix [my Op1] [my Op2] ' || ');
     generate Operation_Not
         '(!' [my Op1 Go] ')';
+    generate Statement_Emit
+    {
+        comment `say without the newline: fmt.Print for an all-literal
+        argument list, fmt.Printf otherwise`;
+        i Go_Import '"fmt"';
+        string Fmt '';
+        string Rest '';
+        string Plain '';
+        flag All_Literal [true];
+        object Arg;
+        for each Arg in [my Arguments]
+        {
+            object AC [Arg.Classification];
+            string U '<none>';
+            forgive
+            {
+                string U2 [AC.Unquoted];
+                if (not (U2 is an Element))
+                {
+                    U = U2;
+                }
+            }
+            if (U sne '<none>')
+            {
+                append Fmt (i Go_Escape_Format U);
+                append Plain U;
+            }
+            else
+            {
+                All_Literal = [false];
+                append Fmt (i Go_Format_Verb Arg);
+                append Rest ', ' [Arg.Go];
+            }
+        }
+        if All_Literal
+        {
+            i = (append 'fmt.Print(' (i Go_Quote Plain) ')');
+        }
+        else
+        {
+            i = (append 'fmt.Printf("' Fmt '"' Rest ')');
+        }
+    }
+    generate Operation_Ordinal
+        'int([]rune(' Op1 ')[0])';
+    generate Operation_Character
+        'string(rune(' Op1 '))';
+    generate Operation_Integer
+        'int(' (i Go_Numeric_Operand [my Op1]) ')';
+    generate Operation_Power
+    {
+        i Go_Import '"math"';
+        i = (append 'math.Pow(float64(' (i Go_Numeric_Operand [my Op1]) '), float64(' (i Go_Numeric_Operand [my Op2]) '))');
+    }
 }
 
 class Go_Compiler is Fallback_Compiler

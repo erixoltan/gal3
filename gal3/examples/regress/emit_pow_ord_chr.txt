@@ -1,0 +1,17 @@
+flowerbox 'regression: the emit statement and the pow, ord, chr and integer
+operations generate in every full backend (added 2026-10-12; integer was
+declared in the dialect with no generator)';
+
+module Elements
+{
+    main
+    {
+        emit 'a';
+        emit 'b' 'c';
+        say '';
+        say (ord 'A');
+        say (chr 66);
+        say (integer (pow 2 10));
+        say (integer (7 / 2));
+    }
+}

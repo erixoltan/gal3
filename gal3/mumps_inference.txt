@@ -1882,6 +1882,16 @@ generator Mumps Fallback
         }
         i = Code;
     }
+    generate Statement_Emit
+        [indent] 'use $principal write ' (i Mumps_Arguments ',') [line];
+    generate Operation_Ordinal
+        '$ascii(' Op1 ')';
+    generate Operation_Character
+        '$char(' Op1 ')';
+    generate Operation_Integer
+        '(' Op1 '\1)';
+    generate Operation_Power
+        '(' Op1 '**' Op2 ')';
 }
 
 class Mumps_Compiler is Fallback_Compiler

@@ -33,17 +33,19 @@ class Runtime:
 
     @classmethod
     def File_Readall(cls, File_Name):
-        with open(File_Name, "r", encoding="utf8") as _FH:
+        # surrogateescape: bytes that are not valid UTF-8 (Latin-1 in old
+        # MUMPS routines) survive a read/write round trip byte for byte
+        with open(File_Name, "r", encoding="utf8", errors="surrogateescape") as _FH:
             return _FH.read()
 
     @classmethod
     def File_Dump(cls, File_Text, File_Name):
-        with open(File_Name, "w") as _FH:
+        with open(File_Name, "w", encoding="utf8", errors="surrogateescape") as _FH:
             _FH.write(File_Text)
 
     @classmethod
     def File_Append(cls, File_Text, File_Name):
-        with open(File_Name, "a") as _FH:
+        with open(File_Name, "a", encoding="utf8", errors="surrogateescape") as _FH:
             _FH.write(File_Text)
 
     @classmethod

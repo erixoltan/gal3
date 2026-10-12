@@ -727,6 +727,11 @@ statement Say 'say' Append_Args
 {
 }
 
+statement Emit 'emit' Append_Args
+{
+    english 'write the arguments to standard output without a trailing newline.';
+}
+
 statement Readline 'readline' Append_Args
 {
 }
@@ -968,6 +973,27 @@ operation Integer 'integer' Unary
 {
     argument Op1 'integer' 'value';
     property string Data_Type 'integer';
+}
+operation Power 'pow' Binary
+{
+    english 'the first operand raised to the power of the second, in floating point.';
+    argument Op1 'number' 'value';
+    argument Op2 'number' 'value';
+    property integer Python_Precedence 2;
+    property integer Javascript_Precedence 2;
+    property string Data_Type 'number';
+}
+operation Ordinal 'ord' Unary
+{
+    english 'the character code of the first character of a string.';
+    argument Op1 'string' 'value';
+    property string Data_Type 'integer';
+}
+operation Character 'chr' Unary
+{
+    english 'the one-character string with the given character code.';
+    argument Op1 'integer' 'value';
+    property string Data_Type 'string';
 }
 
 syntax Optional 'optional'
@@ -1313,6 +1339,7 @@ dialect Compiler
         Statement_Return    'return',
         Statement_Return_If 'return if' 'returnif',
         Statement_Replace   'replace' 'replace with',
+        Statement_Emit 'emit' 'write part',
         Statement_Say       'say' 'print' 'console' 'write line',
         Statement_Sequence  'sequence',
         Statement_Shell_Capture 'shell capture',
@@ -1353,6 +1380,9 @@ dialect Compiler
         Operation_Greater_Equal '>=' '> =' 'ge',
         Operation_I 'i' 'self',
         Operation_Integer 'integer' 'int',
+        Operation_Power 'pow',
+        Operation_Ordinal 'ord',
+        Operation_Character 'chr',
         Operation_Is_A 'is a' 'isa' 'is an' 'isan',
         Operation_Is_Ident 'is ident',
         Operation_Is_Lower 'is lower' 'is lowercase',
