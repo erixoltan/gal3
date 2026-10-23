@@ -2,8 +2,8 @@
 
 The gal3 compiler — the third generation of **gal** (*general abstract
 language*). gal3 self-hosts (its compiler is a gal program that compiles itself
-to a byte-identical fixpoint) and generates five target languages: Python,
-JavaScript, Go, Java, and C++ (plus a frozen C proof of concept).
+to a byte-identical fixpoint) and generates six target languages: Python,
+JavaScript, Go, Java, C++ and MUMPS (plus a frozen C proof of concept).
 
 The source files here are `.txt` only so editors stop trying to syntax-highlight
 them — they are gal source. See `../docs/architecture.md` for how it all works
@@ -11,20 +11,23 @@ and `../docs/status.md` for current state.
 
 ## Prerequisites
 
-- A working `gal2` install at `~/.goalspell/goalspell` (gal2 bootstraps gal3).
-- The shared uv-managed Python environment at the repo root, activated by
-  sourcing `../galenv` (the build scripts do this automatically).
+- Only [`uv`](https://astral.sh/uv): the shared environment at the repo root is
+  fetched and activated by sourcing `../galenv` (the build scripts do this
+  automatically). Build from the repo root with `../bootstrap.sh` — it seeds
+  the frozen stage-0 compiler from `../bootstrap/`, so no prior gal install is
+  needed.
 - For running generated code in every target: `node`, `go` (user-local at
-  `~/.local/go`, added to PATH by `galenv`), a JDK (`javac`/`java`), and a C++
-  compiler (`g++`).
+  `~/.local/go`, added to PATH by `galenv`), a JDK (`javac`/`java`), a C++
+  compiler (`g++`), and — for the MUMPS target — YottaDB.
 
 ## Build
 
-Run from this directory. The three scripts, in order, establish the
-self-hosting fixpoint:
+`../bootstrap.sh` from the repo root establishes the self-hosting fixpoint
+(stage-0 builds `_3`, `_3` builds `_33`, all artifacts must be byte-identical).
+Inside this directory the three scripts it drives are:
 
 ```bash
-./build       # gal2 compiles the .txt sources → ~/.gal3/{artifact}.py
+./build       # the stage-0 compiler in ~/.gal3 compiles the .txt sources → ~/.gal3/{artifact}.py
 ./selfbuild   # those gal3 binaries recompile the sources → ~/.gal3/{artifact}_3.py
 ./selfself    # the _3 binaries rebuild once more → ~/.gal3/{artifact}_33.py
 ```
@@ -55,9 +58,10 @@ python ~/.gal3/galpy.py     /tmp/bank.atomic   /tmp/bank.py
 PYTHONPATH=$HOME/.gal3 python /tmp/bank.py
 ```
 
-Swap `galpy.py` for `galjs.py`, `galgo.py`, `galjava.py`, or `galcpp.py` to emit
-the other targets. The oracle `bin/five_oracle.sh` does exactly this across five
-programs and five languages and checks the outputs are byte-identical.
+Swap `galpy.py` for `galjs.py`, `galgo.py`, `galjava.py`, `galcpp.py` or
+`galmumps.py` to emit the other targets. The oracle `bin/five_oracle.sh` does
+exactly this across five programs and six languages and checks the outputs
+are byte-identical.
 
 ## Layout
 

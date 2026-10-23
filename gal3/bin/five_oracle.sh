@@ -98,7 +98,7 @@ for CELL in $CELLS; do
                 CLS="${PROG^}"
                 python ~/.gal3/galmumps.py "$D/t.fb1" "$D/bundle.m" > /dev/null 2>&1
                 awk -v dir="$D" '/^;;;ROUTINE /{f=dir"/"$2".m"; next} f{print > f}' "$D/bundle.m"
-                cp "$(dirname "$0")/galrt.m" "$D/"
+                cp "$HERE/galrt.m" "$D/"
                 RUN=(bash -c "source /usr/local/etc/ydb_env_set > /dev/null 2>&1; export ydb_routines=\"$D \$ydb_routines\"; exec mumps -run $CLS") ;;
         esac
         if [ -n "$STDIN" ]; then
