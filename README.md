@@ -239,9 +239,9 @@ requires `g++`, `go`, `javac`, and — for the MUMPS cells — YottaDB.
 - **The pipeline is gal → fallback → target.** A high-level element lowers
   step by step into atomic gal, and per-language generators emit the target
   from the atomic result. Backends never parse original source.
-- **Types are inferred per target.** gal is untyped at the source level; the
-  compiler infers types so the generated Go, Java and C++ compile with their
-  strictest flags.
+- **Data types are optional.** gal has `string`/`integer`/`number` declarations
+  when you want them (`string Quantity;`), and the compiler infers the rest —
+  so the generated Go, Java and C++ compile with their strictest flags.
 - **gal source files are `.txt`** — only so editors stop trying to
   syntax-highlight them.
 
